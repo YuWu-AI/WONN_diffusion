@@ -5,6 +5,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .venv/
+.worktrees/
 
 # Local configuration and caches
 .env
