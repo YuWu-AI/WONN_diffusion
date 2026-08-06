@@ -102,6 +102,7 @@ def run_training(config, *, force_cpu: bool = False):
     log_for_0(f"Number of epochs: {config.epochs}")
     log_for_0(f"PyTorch device: {device}, world_size={world}")
     log_for_0(f"BF16 autocast: {bool(getattr(config, 'use_bf16', True)) and device.type == 'cuda'}")
+    log_for_0(f"torch.compile: {bool(getattr(config, 'compile_train', True)) and device.type == 'cuda'}")
     log_for_0(f"Gradient checkpointing: {bool(getattr(config, 'gradient_checkpointing', True))}")
     log_for_0("=" * 60)
 
@@ -255,7 +256,7 @@ def run_training(config, *, force_cpu: bool = False):
 
     # torch.compile before DDP so only the inner module is compiled and
     # checkpoint I/O (which uses unwrap_model -> _orig_mod) still works.
-    if device.type == "cuda":
+    if device.type == "cuda" and bool(getattr(config, "compile_train", True)):
         log_for_0("Compiling ELF model with torch.compile (first step will be slower)...")
         state = state.replace(model=torch.compile(state.model))
 
@@ -354,15 +355,23 @@ def run_training(config, *, force_cpu: bool = False):
             # Skip already-processed batches when resuming mid-epoch
             if epoch == start_epoch and step_in_epoch < steps_to_skip_in_epoch:
                 continue
+            if is_first_step:
+                first_step_start = time.perf_counter()
+                if device.type == "cuda":
+                    torch.cuda.reset_peak_memory_stats(device)
             batch = prepare_batch(batch, config, generator=g)
             state, metrics = train_step(state, encoder=encoder, batch=batch, config=config)
 
-            # Sync only on first step to measure torch.compile time;
+            # Sync only on first step to measure compile/execution time and peak memory;
             # float() on the loss below already forces a device-to-host sync.
             if is_first_step:
                 if device.type == "cuda":
                     torch.cuda.synchronize()
-                log_for_0("First training step (torch.compile + execution) completed...")
+                elapsed = time.perf_counter() - first_step_start
+                log_for_0(f"First training step completed in {elapsed:.3f}s")
+                if device.type == "cuda":
+                    peak_mib = torch.cuda.max_memory_allocated(device) / (1024 ** 2)
+                    log_for_0(f"First training step peak allocated CUDA memory: {peak_mib:.1f} MiB")
 
             global_step += 1
             train_metrics.append(metrics)

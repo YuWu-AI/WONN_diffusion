@@ -5,9 +5,10 @@
 backbone，同时保持 ELF 的连续表征空间、Flow Matching 目标、条件接口、采样器和共享
 decoder 不变。
 
-当前状态（2026-08-06）：Phase 0 已完成。工程基线固定在 ELF 官方 PyTorch
-`b29d883`，WONN 参考实现固定在官方 `62d7ac5`；本机 CUDA 和 ELF-B 随机前向已经验证，
-尚未运行官方 checkpoint evaluation 或实现 WONN backbone。研究设计、默认参数和实验计划见
+当前状态（2026-08-07）：Phase 1 已完成。工程基线固定在 ELF 官方 PyTorch `b29d883`；
+官方 WMT14 De→En ELF-B checkpoint 的 3000 条 validation evaluation 得到 BLEU 26.55，单 batch
+训练和 checkpoint save/load 已验证。下一步是 Phase 2 模型契约测试，尚未实现 WONN backbone。
+详细结果见 [docs/PHASE1_BASELINE.md](docs/PHASE1_BASELINE.md)，研究设计见
 [PROJECT_HANDOFF.md](PROJECT_HANDOFF.md)。
 
 ## 项目结构
@@ -18,7 +19,8 @@ decoder 不变。
 ├── scripts/                     # 官方启动与 PPL 评测脚本
 ├── docs/
 │   ├── ELF_UPSTREAM_README.md   # 官方 PyTorch ELF 使用说明
-│   └── ENVIRONMENT.md           # 已验证硬件、依赖和复现命令
+│   ├── ENVIRONMENT.md           # 已验证硬件、依赖和复现命令
+│   └── PHASE1_BASELINE.md       # ELF checkpoint、validation 和训练 smoke 结果
 ├── papers/
 │   ├── ELF.pdf
 │   └── WONN.pdf
@@ -50,9 +52,9 @@ decoder 不变。
 - `src/utils/generation_utils.py`：多步采样及多 GPU 生成辅助逻辑。
 - `src/configs/`：训练任务配置与采样配置。
 
-本机环境和验证记录见 [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)。ELF 官方 checkpoint、
-训练和评测命令保存在 [docs/ELF_UPSTREAM_README.md](docs/ELF_UPSTREAM_README.md)；
-完整 checkpoint evaluation 尚未在当前机器上验证。
+本机环境见 [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)，Phase 1 实测结果见
+[docs/PHASE1_BASELINE.md](docs/PHASE1_BASELINE.md)。ELF 官方命令保存在
+[docs/ELF_UPSTREAM_README.md](docs/ELF_UPSTREAM_README.md)。
 
 ## 环境复现
 
@@ -66,11 +68,9 @@ uv pip sync --python .venv/bin/python requirements-lock.txt
 
 ## 推荐的开发顺序
 
-1. 用官方 PyTorch checkpoint 跑通 ELF-B WMT14 De→En 小规模生成和评测。
-2. 在未修改 backbone 前完成单 batch 训练 smoke test 和性能记录。
-3. 为现有 ELF 写模型契约测试。
-4. 新增 `wonn_layers.py` 和 `wonn_model.py`，保持原模型输入输出契约。
-5. 先完成单元测试和单 batch 过拟合，再开始端到端比较。
+1. 为现有 ELF 写模型契约测试。
+2. 新增 `wonn_layers.py` 和 `wonn_model.py`，保持原模型输入输出契约。
+3. 先完成单元测试和单 batch 过拟合，再开始端到端比较。
 
 ## 上游关系
 

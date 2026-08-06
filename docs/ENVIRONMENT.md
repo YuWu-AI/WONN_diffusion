@@ -50,10 +50,11 @@ uv pip sync --python .venv/bin/python requirements-lock.txt
 - PyTorch arch list 包含 `sm_120`；
 - CUDA float32 和 bfloat16 matrix multiplication 均产生有限值；
 - ELF-B denoise/decode 双模式随机前向成功；
-- ELF-B 参数量：104,594,304；
+- 随机前向手工使用 32128 词表时，ELF-B 参数量为104,594,304；
 - 输入固定为 `(1, 128, 1024)`（包含 self-conditioning channel concat）；
 - continuous output：`(1, 128, 512)`；
-- decoder logits：`(1, 128, 32128)`；
+- decoder logits：`(1, 128, 32128)`；真实 T5 tokenizer/checkpoint 使用 32100，正式 baseline
+  参数量为104,579,940，详见 `docs/PHASE1_BASELINE.md`；
 - 两次顺序前向约 0.134 秒，峰值 allocated memory 约 493.3 MiB。
 
 时间和显存数字来自单次未预热随机前向，只用于环境 sanity check，不能作为正式性能基线。

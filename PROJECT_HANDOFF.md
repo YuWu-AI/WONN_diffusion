@@ -1,8 +1,8 @@
 # ELF-WONN：架构设计与开发计划
 
-> 状态快照：2026-08-06
+> 状态快照：2026-08-07
 >
-> 项目阶段：Phase 0 已完成；环境与 ELF-B 随机前向已验证，官方 checkpoint baseline 尚未复现
+> 项目阶段：Phase 1 已完成；WMT14 ELF-B validation BLEU 26.55，单 batch 训练和 checkpoint save/load 已验证
 >
 > 目标读者：接手实现的 coworker、在新对话中继续工作的 AI agent
 
@@ -16,12 +16,12 @@
 - WONN 的相位 \(\theta\) 和频率 \(\omega\) 只是一次 denoiser 前向调用内部的 hidden states。
 - 完整替换 ELF 的 `net(z, t, mode)`；不保留 Transformer block 或标准 attention value residual。
 - 保留 ELF 的 encoder、flow path、self-conditioning、in-context control tokens、source prefix、shared denoising/decoding、sampler 和 unembedding。
-- 第一个推荐的端到端任务是 WMT14 De→En；验证成立后再做 OpenWebText（OWT）主实验，最后用 XSum 做长上下文压力测试。WMT14 尚待项目负责人最终确认。
+- 第一个端到端任务确定为 WMT14 De→En；验证成立后再做 OpenWebText（OWT）主实验，最后用 XSum 做长上下文压力测试。完整训练预算仍待项目负责人确认。
 
-建议下一位接手者进入 Phase 1：
+建议下一位接手者进入 Phase 2：
 
-1. 用官方 WMT14 ELF-B PyTorch checkpoint 跑通小规模生成和 validation evaluation。
-2. 完成单 batch 训练 smoke、baseline profiling，并确认 WMT14 De→En 为首个端到端任务。
+1. 为未修改 ELF 建立 backbone 替换必须保持的模型契约测试。
+2. 契约测试通过后再进入 WONN backbone 实现；Phase 1 实测证据见 `docs/PHASE1_BASELINE.md`。
 
 ## 2. 研究问题
 
@@ -57,8 +57,8 @@ D_\phi(z_t,t,c,m)\rightarrow \hat{x}_0,
 
 本地论文：[WONN.pdf](./papers/WONN.pdf)
 
-官方参考实现固定在 `references/WONN/` submodule：
-`62d7ac52dee8b864cb77faac019a3d7ea1c2f7ae`。
+官方参考实现的上游基点为 `62d7ac52dee8b864cb77faac019a3d7ea1c2f7ae`；项目当前在
+`references/WONN/` 固定派生快照 `af3f468d631d8b5a7f3730ccca5b7e686c458da1`。
 
 原始 WONN 的离散动力学为：
 
@@ -430,15 +430,19 @@ W_{\mathrm{out}}
 已完成：
 
 1. ELF PyTorch `pytorch_elf` 基线固定为 `b29d883`，官方远程为 `elf-upstream`。
-2. WONN 官方参考实现以 submodule 固定为 `62d7ac52dee8b864cb77faac019a3d7ea1c2f7ae`。
+2. WONN 项目参考快照为 `af3f468d631d8b5a7f3730ccca5b7e686c458da1`，基于官方 `62d7ac5` 增加本地可视化工具；远程发布问题见 `docs/PHASE1_BASELINE.md`。
 3. 建立 Python 3.10.12 `.venv`，保存 `requirements-lock.txt` 精确依赖快照。
 4. 验证 RTX 5060 Laptop 8GB、PyTorch 2.13.0+cu130、float32/bfloat16 CUDA 运算。
-5. 验证未修改 ELF-B denoise/decode 双模式随机前向；模型参数量为104,594,304。
+5. 验证未修改 ELF-B denoise/decode 双模式随机前向；当时手工使用 32128 词表，参数量为104,594,304；真实 T5/checkpoint 使用 32100 词表和104,579,940个参数。
 6. 记录环境、输入固定长度契约和未验证事项到 `docs/ENVIRONMENT.md`。
 
 Phase 0 不包含官方 checkpoint 指标或训练复现；这些是 Phase 1 的验收内容。
 
 ### Phase 1：复现未修改 ELF baseline
+
+已于 2026-08-07 完成，完整命令、指标、profiling 和失败记录见
+[`docs/PHASE1_BASELINE.md`](docs/PHASE1_BASELINE.md)。WMT14 De→En 3000 条 validation
+BLEU 为 26.55；单 batch 训练、EMA 和 checkpoint save/load 均已验证。
 
 按成本从低到高完成：
 
@@ -646,7 +650,7 @@ Learnable \(S/I\)、\(\omega\) 和 \(\gamma\) 都可能导致过大的 winding�
 - 不额外加入 \(B_t e_t+B_m e_m\)。
 - 每个 token 采用384个 oscillator，phase sin/cos feature width 为768。
 - shared-WONN 是主模型，separate decoder 是 denoiser 机制诊断。
-- ELF PyTorch 基线固定为 `b29d883`，WONN reference 固定为 `62d7ac5`。
+- ELF PyTorch 基线固定为 `b29d883`，WONN 项目参考快照固定为 `af3f468`（上游基点 `62d7ac5`）。
 - 当前开发机为单张 RTX 5060 Laptop 8GB，Phase 0 环境见 `docs/ENVIRONMENT.md`。
 
 ### 第一版实现默认值
@@ -675,8 +679,8 @@ Learnable \(S/I\)、\(\omega\) 和 \(\gamma\) 都可能导致过大的 winding�
 1. 不要重新讨论“是否把 ELF latent 改成 \(\theta\)”；该方向已明确否决。
 2. 不要在第一版额外添加 timestep/mode bias；conditioning 只走 ELF control tokens。
 3. 不要跨 flow sampling step carry \(\theta/\omega\)。
-4. 下一步先完成 Phase 1 官方 checkpoint、训练 smoke 和 profiling。
-5. 正式批准 WMT14 训练预算后，再进入 WONN backbone 实现。
+4. 下一步完成 Phase 2 模型契约测试。
+5. Phase 2 通过且正式批准 WMT14 训练预算后，再进入 WONN backbone 实现。
 6. 实现时保持 `net(...)` 外部接口和训练器不变。
 7. 每个里程碑都同时检查质量、动力学诊断和实际计算成本。
 

@@ -150,6 +150,8 @@ def main():
     log_for_0(f"Loading checkpoint from: {args.checkpoint_path}")
     state, _ = load_checkpoint(args.checkpoint_path, state)
     state.model = state.model.to(device).eval()
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
 
     rank = dist.get_rank() if dist.is_initialized() else 0
 
@@ -186,6 +188,10 @@ def main():
                 )
 
         config.output_dir = original_output_dir
+
+    if device.type == "cuda":
+        peak_mib = torch.cuda.max_memory_allocated(device) / (1024 ** 2)
+        log_for_0(f"Peak allocated CUDA memory: {peak_mib:.1f} MiB")
 
     log_for_0("\nEvaluation complete!")
 
