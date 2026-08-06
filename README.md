@@ -5,10 +5,11 @@
 backbone，同时保持 ELF 的连续表征空间、Flow Matching 目标、条件接口、采样器和共享
 decoder 不变。
 
-当前状态（2026-08-07）：Phase 1 已完成。工程基线固定在 ELF 官方 PyTorch `b29d883`；
-官方 WMT14 De→En ELF-B checkpoint 的 3000 条 validation evaluation 得到 BLEU 26.55，单 batch
-训练和 checkpoint save/load 已验证。下一步是 Phase 2 模型契约测试，尚未实现 WONN backbone。
-详细结果见 [docs/PHASE1_BASELINE.md](docs/PHASE1_BASELINE.md)，研究设计见
+当前状态（2026-08-07）：Phase 2 已完成。工程基线固定在 ELF 官方 PyTorch `b29d883`；
+Phase 1 的 WMT14 De→En ELF-B validation BLEU 为26.55，Phase 2 的15项模型契约测试已在
+CPU/CUDA 上通过。下一步是 Phase 3 独立实现 WONN backbone。实测结果见
+[docs/PHASE1_BASELINE.md](docs/PHASE1_BASELINE.md) 和
+[docs/PHASE2_CONTRACTS.md](docs/PHASE2_CONTRACTS.md)，研究设计见
 [PROJECT_HANDOFF.md](PROJECT_HANDOFF.md)。
 
 ## 项目结构
@@ -20,7 +21,8 @@ decoder 不变。
 ├── docs/
 │   ├── ELF_UPSTREAM_README.md   # 官方 PyTorch ELF 使用说明
 │   ├── ENVIRONMENT.md           # 已验证硬件、依赖和复现命令
-│   └── PHASE1_BASELINE.md       # ELF checkpoint、validation 和训练 smoke 结果
+│   ├── PHASE1_BASELINE.md       # ELF checkpoint、validation 和训练 smoke 结果
+│   └── PHASE2_CONTRACTS.md      # ELF backbone 替换契约及测试结果
 ├── papers/
 │   ├── ELF.pdf
 │   └── WONN.pdf
@@ -68,9 +70,9 @@ uv pip sync --python .venv/bin/python requirements-lock.txt
 
 ## 推荐的开发顺序
 
-1. 为现有 ELF 写模型契约测试。
-2. 新增 `wonn_layers.py` 和 `wonn_model.py`，保持原模型输入输出契约。
-3. 先完成单元测试和单 batch 过拟合，再开始端到端比较。
+1. 新增 `wonn_layers.py` 和 `wonn_model.py`，保持现有契约测试覆盖的输入输出行为。
+2. 增加独立 WONN YAML，不修改官方 ELF 配置。
+3. 让 ELF-WONN 通过同一契约套件，再做单 batch 过拟合和端到端比较。
 
 ## 上游关系
 

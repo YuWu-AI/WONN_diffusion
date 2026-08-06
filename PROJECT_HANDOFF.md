@@ -2,7 +2,7 @@
 
 > 状态快照：2026-08-07
 >
-> 项目阶段：Phase 1 已完成；WMT14 ELF-B validation BLEU 26.55，单 batch 训练和 checkpoint save/load 已验证
+> 项目阶段：Phase 2 已完成；WMT14 ELF-B baseline 已复现，15项模型契约测试已在 CPU/CUDA 上通过
 >
 > 目标读者：接手实现的 coworker、在新对话中继续工作的 AI agent
 
@@ -18,10 +18,10 @@
 - 保留 ELF 的 encoder、flow path、self-conditioning、in-context control tokens、source prefix、shared denoising/decoding、sampler 和 unembedding。
 - 第一个端到端任务确定为 WMT14 De→En；验证成立后再做 OpenWebText（OWT）主实验，最后用 XSum 做长上下文压力测试。完整训练预算仍待项目负责人确认。
 
-建议下一位接手者进入 Phase 2：
+建议下一位接手者进入 Phase 3：
 
-1. 为未修改 ELF 建立 backbone 替换必须保持的模型契约测试。
-2. 契约测试通过后再进入 WONN backbone 实现；Phase 1 实测证据见 `docs/PHASE1_BASELINE.md`。
+1. 先独立实现 `wonn_layers.py` 的动力学组件，再组装 `wonn_model.py`。
+2. 使用独立 WONN YAML，并让 ELF-WONN 通过 `docs/PHASE2_CONTRACTS.md` 记录的同一契约套件。
 
 ## 2. 研究问题
 
@@ -457,6 +457,9 @@ BLEU 为 26.55；单 batch 训练、EMA 和 checkpoint save/load 均已验证。
 
 ### Phase 2：建立模型契约测试
 
+已于 2026-08-07 完成。15项测试在 CPU/CUDA 上全部通过，覆盖范围、运行命令和固定事实见
+[`docs/PHASE2_CONTRACTS.md`](docs/PHASE2_CONTRACTS.md)。
+
 先用原始 ELF 定义替换 backbone 后必须继续满足的契约：
 
 - 输入/输出 shape、dtype 和 device；
@@ -679,8 +682,8 @@ Learnable \(S/I\)、\(\omega\) 和 \(\gamma\) 都可能导致过大的 winding�
 1. 不要重新讨论“是否把 ELF latent 改成 \(\theta\)”；该方向已明确否决。
 2. 不要在第一版额外添加 timestep/mode bias；conditioning 只走 ELF control tokens。
 3. 不要跨 flow sampling step carry \(\theta/\omega\)。
-4. 下一步完成 Phase 2 模型契约测试。
-5. Phase 2 通过且正式批准 WMT14 训练预算后，再进入 WONN backbone 实现。
+4. 下一步进入 Phase 3，先实现独立 WONN dynamics 和 backbone。
+5. ELF-WONN 通过 Phase 2 契约测试且正式批准 WMT14 训练预算后，再启动端到端训练。
 6. 实现时保持 `net(...)` 外部接口和训练器不变。
 7. 每个里程碑都同时检查质量、动力学诊断和实际计算成本。
 
