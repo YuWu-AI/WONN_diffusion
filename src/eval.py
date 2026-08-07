@@ -15,7 +15,7 @@ import torch.distributed as dist
 from transformers import AutoTokenizer
 
 from modules.t5_encoder import get_encoder
-from modules.model import ELF_models
+from modules.model_factory import build_model
 from utils.logging_utils import log_for_0
 from utils.checkpoint_utils import load_checkpoint
 from utils.train_utils import TrainState, get_optimizer
@@ -125,14 +125,11 @@ def main():
     # ELF model
     log_for_0(f"Creating {config.model} model...")
     vocab_size = tokenizer.vocab_size
-    model = ELF_models[config.model](
-        text_encoder_dim=encoder_config.d_model, max_length=config.max_length,
-        attn_drop=config.attn_dropout, proj_drop=config.proj_dropout,
-        num_time_tokens=config.num_time_tokens,
-        num_self_cond_cfg_tokens=config.num_self_cond_cfg_tokens,
+    model = build_model(
+        config,
+        text_encoder_dim=encoder_config.d_model,
+        max_length=config.max_length,
         vocab_size=vocab_size,
-        num_model_mode_tokens=config.num_model_mode_tokens,
-        bottleneck_dim=config.bottleneck_dim,
     ).to(device)
 
     # Train state template (only used to plumb EMA params + step/epoch).

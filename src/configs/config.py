@@ -53,6 +53,16 @@ class Config:
     attn_dropout: float = 0.0
     proj_dropout: float = 0.0
 
+    # WONN backbone (used only when model == "ELF-WONN-B")
+    wonn_num_oscillators: int = 384
+    wonn_num_layers: int = 6
+    wonn_num_inner_steps: int = 2
+    wonn_num_heads: int = 12
+    wonn_qk_head_dim: int = 64
+    wonn_step_init: float = 0.1
+    wonn_step_max: float = 0.25
+    wonn_coupling_mode: str = "learned"
+
     # Denoiser objective
     denoiser_p_mean: float = 0.8
     denoiser_p_std: float = 0.8

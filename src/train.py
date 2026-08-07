@@ -31,7 +31,7 @@ from utils.train_utils import (
 )
 from generation import run_generation
 from configs.config import load_config_from_yaml, apply_config_overrides, load_sampling_configs, SamplingConfig
-from modules.model import ELF_models
+from modules.model_factory import build_model
 from utils.data_utils import get_dataloader, prepare_batch, load_dataset, get_pad_token_id
 from train_step import train_step
 
@@ -153,19 +153,15 @@ def run_training(config, *, force_cpu: bool = False):
     except TypeError:
         vocab_size = tokenizer.vocab_size
     log_for_0(f"Tokenizer vocab: CE head={vocab_size}")
-    model = ELF_models[config.model](
-        text_encoder_dim=encoder_config.d_model, max_length=config.max_length,
-        attn_drop=config.attn_dropout, proj_drop=config.proj_dropout,
-        num_time_tokens=config.num_time_tokens,
-        num_self_cond_cfg_tokens=config.num_self_cond_cfg_tokens,
+    model = build_model(
+        config,
+        text_encoder_dim=encoder_config.d_model,
+        max_length=config.max_length,
         vocab_size=vocab_size,
-        num_model_mode_tokens=config.num_model_mode_tokens,
-        bottleneck_dim=config.bottleneck_dim,
-        gradient_checkpointing=bool(getattr(config, "gradient_checkpointing", True)),
     ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
-    log_for_0(f"ELF parameters: {total_params:,}")
+    log_for_0(f"Model parameters: {total_params:,}")
     total_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     log_for_0(f"Total trainable parameters: {total_trainable:,}")
 

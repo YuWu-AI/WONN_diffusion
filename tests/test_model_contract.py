@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from modules.model import ELF_models
-from tests.contract_factories import make_tiny_elf
+from tests.contract_factories import make_tiny_elf, make_tiny_wonn
 
 
 class BackboneContractMixin:
@@ -159,6 +159,10 @@ class ELFModelContractTest(BackboneContractMixin, unittest.TestCase):
     model_factory = staticmethod(make_tiny_elf)
 
 
+class WONNModelContractTest(BackboneContractMixin, unittest.TestCase):
+    model_factory = staticmethod(make_tiny_wonn)
+
+
 class CudaBackboneContractMixin:
     model_factory = None
 
@@ -222,6 +226,11 @@ class ELFCudaContractTest(CudaBackboneContractMixin, unittest.TestCase):
         self.assertEqual(logits.dtype, torch.float32)
         self.assertTrue(torch.isfinite(output).all())
         self.assertTrue(torch.isfinite(logits).all())
+
+
+@unittest.skipUnless(torch.cuda.is_available(), "CUDA is required for mixed-precision contracts")
+class WONNCudaContractTest(CudaBackboneContractMixin, unittest.TestCase):
+    model_factory = staticmethod(make_tiny_wonn)
 
 
 if __name__ == "__main__":

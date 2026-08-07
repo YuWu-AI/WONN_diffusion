@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from configs.config import Config, SamplingConfig
-from tests.contract_factories import make_tiny_elf
+from tests.contract_factories import make_tiny_elf, make_tiny_wonn
 from utils.generation_utils import _dlm_decode_batch, _generate_samples_single_batch
 from utils.sampling_utils import add_noise, restore_cond, restore_vx
 
@@ -104,6 +104,10 @@ class SamplingContractMixin:
 
 class ELFSamplingContractTest(SamplingContractMixin, unittest.TestCase):
     model_factory = staticmethod(make_tiny_elf)
+
+
+class WONNSamplingContractTest(SamplingContractMixin, unittest.TestCase):
+    model_factory = staticmethod(make_tiny_wonn)
 
 
 if __name__ == "__main__":
