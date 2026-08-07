@@ -119,5 +119,6 @@ transition weights 在 gate 离开零点后才开始获得有效更新，Phase 4
 - 30.5M 参数少于 ELF-B 的104.6M，但12次 recurrent coupling 的真实计算量尚未与 ELF-B匹配；
   不能把参数更少直接解释为效率更高。
 
-Phase 4 应依次完成 denoising MSE 过拟合、decoding CE 过拟合、混合 objective 过拟合和 synthetic
-conditional sensitivity。任何一项失败都先修可学性或动力学问题，不启动完整 WMT14 训练。
+后续 Phase 4 已完成 denoising MSE、decoding CE、混合 objective 过拟合和 synthetic conditional
+sensitivity；命令、阈值和结果见 `docs/PHASE4_LEARNABILITY.md`。这些结果只证明固定任务可学，完整
+WMT14 训练仍需独立预算批准。

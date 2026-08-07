@@ -10,4 +10,5 @@
 
 深入设计见 `PROJECT_HANDOFF.md`，已验证环境见 `docs/ENVIRONMENT.md`，官方 ELF 命令见
 `docs/ELF_UPSTREAM_README.md`，各阶段验收证据见 `docs/PHASE1_BASELINE.md`、
-`docs/PHASE2_CONTRACTS.md` 和 `docs/PHASE3_WONN_ELF.md`。
+`docs/PHASE2_CONTRACTS.md`、`docs/PHASE3_WONN_ELF.md` 和
+`docs/PHASE4_LEARNABILITY.md`。

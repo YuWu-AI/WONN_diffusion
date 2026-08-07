@@ -5,12 +5,14 @@
 backbone，同时保持 ELF 的连续表征空间、Flow Matching 目标、条件接口、采样器和共享
 decoder 不变。
 
-当前状态（2026-08-07）：Phase 3 已完成。工程基线固定在 ELF 官方 PyTorch `b29d883`；
+当前状态（2026-08-07）：Phase 4 已完成。工程基线固定在 ELF 官方 PyTorch `b29d883`；
 Phase 1 的 WMT14 De→En ELF-B validation BLEU 为26.55，第一版30.5M参数的 WONN-ELF 已接入
-训练器和采样器，并在 GPU 上通过40项严格测试。下一步是 Phase 4 最小可学性验证。实测结果见
+训练器和采样器，并通过固定 WMT14 batch 的 MSE、CE、混合 objective 过拟合和 synthetic
+conditional sensitivity 验收。下一步是在批准预算后进入 Phase 5 WMT14 端到端训练。实测结果见
 [docs/PHASE1_BASELINE.md](docs/PHASE1_BASELINE.md) 和
 [docs/PHASE2_CONTRACTS.md](docs/PHASE2_CONTRACTS.md)、
-[docs/PHASE3_WONN_ELF.md](docs/PHASE3_WONN_ELF.md)，研究设计见
+[docs/PHASE3_WONN_ELF.md](docs/PHASE3_WONN_ELF.md)、
+[docs/PHASE4_LEARNABILITY.md](docs/PHASE4_LEARNABILITY.md)，研究设计见
 [PROJECT_HANDOFF.md](PROJECT_HANDOFF.md)。
 
 ## 项目结构
@@ -18,13 +20,14 @@ Phase 1 的 WMT14 De→En ELF-B validation BLEU 为26.55，第一版30.5M参数�
 ```text
 .
 ├── src/                         # ELF PyTorch 训练、模型、采样和评测代码
-├── scripts/                     # 官方启动、PPL 评测与 Phase 2/3 严格验收脚本
+├── scripts/                     # 官方启动、PPL 评测与 Phase 2/3/4 严格验收脚本
 ├── docs/
 │   ├── ELF_UPSTREAM_README.md   # 官方 PyTorch ELF 使用说明
 │   ├── ENVIRONMENT.md           # 已验证硬件、依赖和复现命令
 │   ├── PHASE1_BASELINE.md       # ELF checkpoint、validation 和训练 smoke 结果
 │   ├── PHASE2_CONTRACTS.md      # ELF backbone 替换契约及测试结果
-│   └── PHASE3_WONN_ELF.md       # WONN-ELF 实现、诊断和 smoke 结果
+│   ├── PHASE3_WONN_ELF.md       # WONN-ELF 实现、诊断和 smoke 结果
+│   └── PHASE4_LEARNABILITY.md   # 固定 batch 可学性和条件敏感性结果
 ├── papers/
 │   ├── ELF.pdf
 │   └── WONN.pdf
@@ -73,11 +76,11 @@ uv pip sync --python .venv/bin/python requirements-lock.txt
 `.venv` 只属于本机环境，不进入版本控制。若要重新解析允许范围内的最新依赖，使用
 `requirements.txt`；需要复现 Phase 0 环境时使用 `requirements-lock.txt`。
 
-## 推荐的开发顺序
+## 下一阶段
 
-1. 分别完成 denoising MSE 和 decoding CE 单 batch 过拟合。
-2. 验证混合 objective 与 synthetic conditional sensitivity。
-3. 小数据可学性成立后，再申请完整 WMT14 训练预算和端到端比较。
+1. 保留 Phase 4 固定任务作为后续模型改动的可学性 gate。
+2. 为 ELF/WONN 建立实际 wall-clock、显存和 FLOPs 对照，确定 compute-matched 配置。
+3. 确认训练预算、随机种子和调参规则后，再启动 Phase 5 WMT14 端到端比较。
 
 ## 上游关系
 

@@ -2,7 +2,7 @@
 
 > 状态快照：2026-08-07
 >
-> 项目阶段：Phase 3 已完成；第一版 WONN-ELF 已接入，40项严格测试已在 CUDA 上通过
+> 项目阶段：Phase 4 已完成；固定 batch 可学性和 synthetic conditional sensitivity 已通过
 >
 > 目标读者：接手实现的 coworker、在新对话中继续工作的 AI agent
 
@@ -18,10 +18,10 @@
 - 保留 ELF 的 encoder、flow path、self-conditioning、in-context control tokens、source prefix、shared denoising/decoding、sampler 和 unembedding。
 - 第一个端到端任务优先候选为 WMT14 De→En；验证成立后再做 OpenWebText（OWT）主实验，最后用 XSum 做长上下文压力测试。任务选择和完整训练预算仍待项目负责人确认。
 
-建议下一位接手者进入 Phase 4：
+建议下一位接手者准备 Phase 5：
 
-1. 分别验证 denoising MSE 和 decoding CE 单 batch 可过拟合。
-2. 再验证混合 objective 和 synthetic conditional sensitivity，不直接启动完整 WMT14 训练。
+1. 先确定 compute-matched 配置、完整训练预算、随机种子和公平调参规则。
+2. 获得批准后再启动 WMT14 ELF/WONN 端到端训练；Phase 4 不能替代泛化评测。
 
 ## 2. 研究问题
 
@@ -505,15 +505,17 @@ Phase 3 已验证 phase wrapping、确定性初始化、mask、梯度、mixed pr
 
 ### Phase 4：最小可学性验证
 
-按顺序完成，任何一步失败都不要扩大训练：
+已于 2026-08-07 完成，严格命令、阈值和完整结果见
+[`docs/PHASE4_LEARNABILITY.md`](docs/PHASE4_LEARNABILITY.md)。验收按顺序完成：
 
-1. 单 batch 过拟合 denoising MSE；
-2. 单 batch 过拟合 decoding CE；
-3. 两种 mode 按 ELF 原比例混合训练并过拟合；
-4. synthetic conditional task，验证 control/source 会改变 target；
-5. WMT14 小数据子集比较 ELF-Transformer 与 ELF-WONN curves。
+1. 正式 WONN-B 在固定真实 T5/WMT14 batch 上过拟合 denoising MSE；
+2. 正式 WONN-B 在同一输入路径上过拟合 decoding CE；
+3. batch 5 按 ELF 的4:1比例同时过拟合两种 objective；
+4. target 输入相同时，仅交换 source latent 即使预测100%翻转；
+5. 正式 ELF-B 和 ELF-WONN-B 在相同5样本、40步设置下，L2与CE均下降。
 
-重点排除 phase collapse、output shortcut、decoder collapse 和 padding leakage，而不是追求最终 BLEU。
+Phase 4 还确认 frequency gate 和 transition weights 均实际变化。它排除了“backbone 完全不可训练”
+和“conditional 输出完全忽略 source”两类失败，但固定 batch 过拟合不能证明泛化、BLEU 或模型优劣。
 
 ### Phase 5：第一个端到端任务候选——WMT14 De→En
 
@@ -626,7 +628,7 @@ Learnable \(S/I\)、\(\omega\) 和 \(\gamma\) 都可能导致过大的 winding�
 
 - 官方 ELF baseline 可运行；
 - WONN 两种 mode 均稳定训练；
-- 单 batch 和小数据集能够过拟合；
+- 单 batch 和固定小批次能够过拟合；
 - control/source 信息确实影响 target；
 - 不出现系统性 NaN、phase collapse 或 padding leakage；
 - profiler 能给出可信的参数、FLOPs、显存和吞吐数据。
@@ -687,8 +689,8 @@ Learnable \(S/I\)、\(\omega\) 和 \(\gamma\) 都可能导致过大的 winding�
 1. 不要重新讨论“是否把 ELF latent 改成 \(\theta\)”；该方向已明确否决。
 2. 不要在第一版额外添加 timestep/mode bias；conditioning 只走 ELF control tokens。
 3. 不要跨 flow sampling step carry \(\theta/\omega\)。
-4. 下一步进入 Phase 4，先验证两种 objective 的单 batch 可学性。
-5. ELF-WONN 通过 Phase 4 且正式批准 WMT14 训练预算后，再启动端到端训练。
+4. Phase 4 已完成；不要把固定 batch 结果解释为泛化或质量结论。
+5. 正式批准 WMT14 训练预算并确定公平比较规则后，再进入 Phase 5 端到端训练。
 6. 实现时保持 `net(...)` 外部接口和训练器不变。
 7. 每个里程碑都同时检查质量、动力学诊断和实际计算成本。
 
