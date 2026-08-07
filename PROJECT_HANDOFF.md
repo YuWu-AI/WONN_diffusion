@@ -2,7 +2,7 @@
 
 > 状态快照：2026-08-07
 >
-> 项目阶段：Phase 2 已完成；WMT14 ELF-B baseline 已复现，15项模型契约测试已在 CPU/CUDA 上通过
+> 项目阶段：Phase 3 已完成；第一版 WONN-ELF 已接入，40项严格测试已在 CUDA 上通过
 >
 > 目标读者：接手实现的 coworker、在新对话中继续工作的 AI agent
 
@@ -18,10 +18,10 @@
 - 保留 ELF 的 encoder、flow path、self-conditioning、in-context control tokens、source prefix、shared denoising/decoding、sampler 和 unembedding。
 - 第一个端到端任务优先候选为 WMT14 De→En；验证成立后再做 OpenWebText（OWT）主实验，最后用 XSum 做长上下文压力测试。任务选择和完整训练预算仍待项目负责人确认。
 
-建议下一位接手者进入 Phase 3：
+建议下一位接手者进入 Phase 4：
 
-1. 先独立实现 `wonn_layers.py` 的动力学组件，再组装 `wonn_model.py`。
-2. 使用独立 WONN YAML，并让 ELF-WONN 通过 `docs/PHASE2_CONTRACTS.md` 记录的同一契约套件。
+1. 分别验证 denoising MSE 和 decoding CE 单 batch 可过拟合。
+2. 再验证混合 objective 和 synthetic conditional sensitivity，不直接启动完整 WMT14 训练。
 
 ## 2. 研究问题
 
@@ -475,7 +475,11 @@ WONN 只能在这些测试对 ELF 基线通过后接入；同一组测试随后�
 
 ### Phase 3：实现独立 WONN backbone
 
-建议模块边界：
+已于 2026-08-07 完成。实现、参数量、动力学诊断、GPU smoke 和已知限制见
+[`docs/PHASE3_WONN_ELF.md`](docs/PHASE3_WONN_ELF.md)。第一版使用384 oscillators、6 layers、
+每层2个 inner steps和12个 coupling heads；公共模型名为 `ELF-WONN-B`。
+
+实际模块边界：
 
 ```text
 WONNDenoiser
@@ -491,12 +495,13 @@ WONNDenoiser
   PhaseReadout
 ```
 
-`WONNDenoiser.forward(...)` 必须与 ELF 原 `net(...)` 的输入输出 shape 和 mode 行为一致。
-优先实现 `src/modules/wonn_layers.py` 的独立动力学组件，再组装
-`src/modules/wonn_model.py`，最后增加独立 WONN YAML；官方 ELF 配置保持不动。
+`WONNELF.forward(...)` 已保持 ELF 原模型的输入输出 shape 和 mode 行为。
+`src/modules/wonn_layers.py`、`src/modules/wonn_model.py` 和独立 WONN YAML 已落地；官方 ELF
+配置保持不动。
 
-必须验证 phase wrapping、确定性初始化、mask、梯度、mixed precision、\(L=1,T=1\) 和正式配置，
-并记录 phase update、\(\omega\) norm、attention entropy 与 NaN/Inf。
+Phase 3 已验证 phase wrapping、确定性初始化、mask、梯度、mixed precision、\(L=1,T=1\) 和正式
+配置，并记录 phase update、\(\omega\) norm、attention entropy 与 finite fraction。训练后的动力学
+稳定性和可学性属于 Phase 4。
 
 ### Phase 4：最小可学性验证
 
@@ -682,8 +687,8 @@ Learnable \(S/I\)、\(\omega\) 和 \(\gamma\) 都可能导致过大的 winding�
 1. 不要重新讨论“是否把 ELF latent 改成 \(\theta\)”；该方向已明确否决。
 2. 不要在第一版额外添加 timestep/mode bias；conditioning 只走 ELF control tokens。
 3. 不要跨 flow sampling step carry \(\theta/\omega\)。
-4. 下一步进入 Phase 3，先实现独立 WONN dynamics 和 backbone。
-5. ELF-WONN 通过 Phase 2 契约测试且正式批准 WMT14 训练预算后，再启动端到端训练。
+4. 下一步进入 Phase 4，先验证两种 objective 的单 batch 可学性。
+5. ELF-WONN 通过 Phase 4 且正式批准 WMT14 训练预算后，再启动端到端训练。
 6. 实现时保持 `net(...)` 外部接口和训练器不变。
 7. 每个里程碑都同时检查质量、动力学诊断和实际计算成本。
 

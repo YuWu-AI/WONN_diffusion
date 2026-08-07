@@ -5,11 +5,12 @@
 backbone，同时保持 ELF 的连续表征空间、Flow Matching 目标、条件接口、采样器和共享
 decoder 不变。
 
-当前状态（2026-08-07）：Phase 2 已完成。工程基线固定在 ELF 官方 PyTorch `b29d883`；
-Phase 1 的 WMT14 De→En ELF-B validation BLEU 为26.55，Phase 2 的15项模型契约测试已在
-CPU/CUDA 上通过。下一步是 Phase 3 独立实现 WONN backbone。实测结果见
+当前状态（2026-08-07）：Phase 3 已完成。工程基线固定在 ELF 官方 PyTorch `b29d883`；
+Phase 1 的 WMT14 De→En ELF-B validation BLEU 为26.55，第一版30.5M参数的 WONN-ELF 已接入
+训练器和采样器，并在 GPU 上通过40项严格测试。下一步是 Phase 4 最小可学性验证。实测结果见
 [docs/PHASE1_BASELINE.md](docs/PHASE1_BASELINE.md) 和
-[docs/PHASE2_CONTRACTS.md](docs/PHASE2_CONTRACTS.md)，研究设计见
+[docs/PHASE2_CONTRACTS.md](docs/PHASE2_CONTRACTS.md)、
+[docs/PHASE3_WONN_ELF.md](docs/PHASE3_WONN_ELF.md)，研究设计见
 [PROJECT_HANDOFF.md](PROJECT_HANDOFF.md)。
 
 ## 项目结构
@@ -17,12 +18,13 @@ CPU/CUDA 上通过。下一步是 Phase 3 独立实现 WONN backbone。实测结
 ```text
 .
 ├── src/                         # ELF PyTorch 训练、模型、采样和评测代码
-├── scripts/                     # 官方启动、PPL 评测与 Phase 2 严格验收脚本
+├── scripts/                     # 官方启动、PPL 评测与 Phase 2/3 严格验收脚本
 ├── docs/
 │   ├── ELF_UPSTREAM_README.md   # 官方 PyTorch ELF 使用说明
 │   ├── ENVIRONMENT.md           # 已验证硬件、依赖和复现命令
 │   ├── PHASE1_BASELINE.md       # ELF checkpoint、validation 和训练 smoke 结果
-│   └── PHASE2_CONTRACTS.md      # ELF backbone 替换契约及测试结果
+│   ├── PHASE2_CONTRACTS.md      # ELF backbone 替换契约及测试结果
+│   └── PHASE3_WONN_ELF.md       # WONN-ELF 实现、诊断和 smoke 结果
 ├── papers/
 │   ├── ELF.pdf
 │   └── WONN.pdf
@@ -36,10 +38,9 @@ CPU/CUDA 上通过。下一步是 Phase 3 独立实现 WONN backbone。实测结
 └── LICENSE                      # ELF 的 MIT License
 ```
 
-`src/` 的模型和训练流程仍以 ELF PyTorch 为算法基线，尚未接入 WONN。Phase 1 只增加训练
-compile 开关和 profiling 日志；Phase 2 修复了 `self_cond_cfg_scale` 省略时 control-token prefix
-长度不一致的问题，外部模型契约保持不变。后续 WONN 实现应新增在 `src/modules/`，而不是从
-`references/WONN/` 直接导入。训练产物统一写到 `outputs/`，该目录不进入版本控制。
+`src/` 的训练、Flow Matching、conditioning、sampler 和 decoder 仍以 ELF PyTorch 为基线；
+`src/modules/wonn_layers.py` 和 `wonn_model.py` 提供独立 WONN backbone，运行时代码不从
+`references/WONN/` 导入。训练产物统一写到 `outputs/`，该目录不进入版本控制。
 
 ## ELF 代码导览
 
@@ -49,6 +50,9 @@ compile 开关和 profiling 日志；Phase 2 修复了 `self_cond_cfg_scale` 省
 - `src/generation.py`：组织无条件生成、翻译和摘要评测。
 - `src/modules/model.py`：当前 ELF Transformer backbone、flow 输出头和共享 token decoder。
 - `src/modules/layers.py`：attention、RoPE、RMSNorm、SwiGLU 和投影层。
+- `src/modules/wonn_layers.py`：Winfree coupling、phase recurrence 和 frequency transition。
+- `src/modules/wonn_model.py`：ELF-compatible WONN backbone、readout 和动力学诊断。
+- `src/modules/model_factory.py`：ELF/WONN 公共模型构造入口。
 - `src/modules/t5_encoder.py`：冻结的 T5 continuous embedding encoder。
 - `src/utils/data_utils.py`：数据加载、padding、source/target 拼接与 mask。
 - `src/utils/sampling_utils.py`：加噪、self-conditioning、CFG、ODE/SDE 更新。
@@ -71,9 +75,9 @@ uv pip sync --python .venv/bin/python requirements-lock.txt
 
 ## 推荐的开发顺序
 
-1. 新增 `wonn_layers.py` 和 `wonn_model.py`，保持现有契约测试覆盖的输入输出行为。
-2. 增加独立 WONN YAML，不修改官方 ELF 配置。
-3. 让 ELF-WONN 通过同一契约套件，再做单 batch 过拟合和端到端比较。
+1. 分别完成 denoising MSE 和 decoding CE 单 batch 过拟合。
+2. 验证混合 objective 与 synthetic conditional sensitivity。
+3. 小数据可学性成立后，再申请完整 WMT14 训练预算和端到端比较。
 
 ## 上游关系
 

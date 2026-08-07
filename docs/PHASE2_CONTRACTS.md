@@ -54,7 +54,6 @@ Phase 2 没有修改 Flow Matching、mask、sampler 或 decoder，也没有接�
 `src/modules/model.py` 已做最小修复，使 optional 参数语义与现有接口一致，传入 scale 的正式路径不变。
 测试使用标准库 `unittest`，未新增依赖。`references/WONN` 未初始化且运行时代码未从中导入。
 
-Phase 3 应先独立实现 `src/modules/wonn_layers.py`，再组装 `src/modules/wonn_model.py` 和独立
-WONN YAML。模型和 sampler 契约已提取为可复用 mixin；接入后只需提供 WONN tiny-model factory
-和对应 `unittest.TestCase` 子类，并要求 ELF 与 ELF-WONN 同时通过。不能通过放宽 shape、mask、
-确定性或 sampler 断言来迁就新模型。
+Phase 3 已使用 `src/modules/wonn_layers.py`、`src/modules/wonn_model.py` 和独立 WONN YAML 完成
+接入。模型和 sampler 契约通过可复用 mixin 同时验证 ELF 与 ELF-WONN；没有为新模型放宽 shape、
+mask、确定性或 sampler 断言。实现和严格验收结果见 `docs/PHASE3_WONN_ELF.md`。
