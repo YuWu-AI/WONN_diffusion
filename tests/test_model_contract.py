@@ -8,32 +8,18 @@ import torch
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from modules.model import ELF, ELF_models
+from modules.model import ELF_models
+from tests.contract_factories import make_tiny_elf
 
 
-def make_tiny_model(
-    *, self_cond_tokens=0, gradient_checkpointing=False, dropout=0.0, depth=2
-):
-    torch.manual_seed(7)
-    return ELF(
-        text_encoder_dim=16,
-        max_length=6,
-        hidden_size=32,
-        depth=depth,
-        num_heads=4,
-        mlp_ratio=2.0,
-        attn_drop=dropout,
-        proj_drop=dropout,
-        bottleneck_dim=8,
-        num_time_tokens=1,
-        num_self_cond_cfg_tokens=self_cond_tokens,
-        num_model_mode_tokens=1,
-        vocab_size=23,
-        gradient_checkpointing=gradient_checkpointing,
-    )
+class BackboneContractMixin:
+    model_factory = None
 
+    def make_model(self, **kwargs):
+        if self.model_factory is None:
+            raise NotImplementedError("A backbone factory is required")
+        return self.model_factory(**kwargs)
 
-class ELFModelContractTest(unittest.TestCase):
     def setUp(self):
         torch.manual_seed(11)
         self.x = torch.randn(2, 6, 16)
@@ -41,7 +27,7 @@ class ELFModelContractTest(unittest.TestCase):
         self.mask = torch.ones(2, 6)
 
     def test_denoise_and_decode_shapes_dtype_and_device(self):
-        model = make_tiny_model().eval()
+        model = self.make_model().eval()
 
         denoised, logits = model(self.x, self.t, attention_mask=self.mask)
         self.assertEqual(denoised.shape, (2, 6, 16))
@@ -62,7 +48,7 @@ class ELFModelContractTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(logits).all())
 
     def test_self_conditioning_off_and_on_preserve_output_contract(self):
-        model = make_tiny_model(self_cond_tokens=1).eval()
+        model = self.make_model(self_cond_tokens=1).eval()
         scale = torch.ones(2)
 
         plain_out, plain_logits = model(
@@ -83,8 +69,17 @@ class ELFModelContractTest(unittest.TestCase):
         self.assertEqual(plain_out.shape, (2, 6, 16))
         self.assertEqual(plain_logits.shape, (2, 6, 23))
 
+        changed_self_cond = torch.ones_like(self.x)
+        _, changed_logits = model(
+            torch.cat([self.x, changed_self_cond], dim=-1),
+            self.t,
+            self_cond_cfg_scale=scale,
+            decoder_step_active=True,
+        )
+        self.assertFalse(torch.allclose(self_cond_logits, changed_logits))
+
     def test_scalar_and_per_example_modes_have_consistent_semantics(self):
-        model = make_tiny_model().eval()
+        model = self.make_model().eval()
         _, logits_false = model(self.x, self.t, decoder_step_active=False)
         _, logits_true = model(self.x, self.t, decoder_step_active=True)
         _, logits_mixed = model(
@@ -98,7 +93,7 @@ class ELFModelContractTest(unittest.TestCase):
         self.assertFalse(torch.allclose(logits_false, logits_true))
 
     def test_padding_keys_do_not_change_valid_token_outputs(self):
-        model = make_tiny_model().eval()
+        model = self.make_model().eval()
         mask = torch.tensor([[1, 1, 1, 0, 0, 0], [1, 1, 1, 0, 0, 0]])
         changed = self.x.clone()
         changed[:, 3:] = changed[:, 3:] + 1000.0
@@ -111,7 +106,7 @@ class ELFModelContractTest(unittest.TestCase):
         torch.testing.assert_close(logits[:, :3], changed_logits[:, :3])
 
     def test_eval_forward_is_deterministic(self):
-        model = make_tiny_model(dropout=0.5, depth=4).eval()
+        model = self.make_model(dropout=0.5, depth=4).eval()
         _, first = model(self.x, self.t, decoder_step_active=True, deterministic=True)
         _, second = model(self.x, self.t, decoder_step_active=True, deterministic=True)
         torch.testing.assert_close(first, second, rtol=0, atol=0)
@@ -125,7 +120,7 @@ class ELFModelContractTest(unittest.TestCase):
         self.assertFalse(torch.allclose(stochastic_first, stochastic_second))
 
     def test_rope_requires_fixed_max_length(self):
-        model = make_tiny_model().eval()
+        model = self.make_model().eval()
         with self.assertRaises((RuntimeError, ValueError)):
             model(self.x[:, :-1], self.t, decoder_step_active=True)
         with self.assertRaises((RuntimeError, ValueError)):
@@ -135,13 +130,14 @@ class ELFModelContractTest(unittest.TestCase):
                 decoder_step_active=True,
             )
 
-    def test_self_cond_cfg_tokens_require_scale_token(self):
-        model = make_tiny_model(self_cond_tokens=1).eval()
-        with self.assertRaises((RuntimeError, ValueError)):
-            model(self.x, self.t, decoder_step_active=True)
+    def test_self_cond_cfg_scale_is_optional(self):
+        model = self.make_model(self_cond_tokens=1).eval()
+        output, logits = model(self.x, self.t, decoder_step_active=True)
+        self.assertEqual(output.shape, (2, 6, 16))
+        self.assertEqual(logits.shape, (2, 6, 23))
 
     def test_backward_with_gradient_checkpointing(self):
-        model = make_tiny_model(gradient_checkpointing=True).train()
+        model = self.make_model(gradient_checkpointing=True).train()
         x = self.x.clone().requires_grad_(True)
         output, logits = model(x, self.t, decoder_step_active=True)
         loss = output.mean() + logits.square().mean()
@@ -159,11 +155,21 @@ class ELFModelContractTest(unittest.TestCase):
         self.assertTrue(all(finite_grads))
 
 
-@unittest.skipUnless(torch.cuda.is_available(), "CUDA is required for mixed-precision contracts")
-class ELFCudaContractTest(unittest.TestCase):
+class ELFModelContractTest(BackboneContractMixin, unittest.TestCase):
+    model_factory = staticmethod(make_tiny_elf)
+
+
+class CudaBackboneContractMixin:
+    model_factory = None
+
+    def make_model(self, **kwargs):
+        if self.model_factory is None:
+            raise NotImplementedError("A backbone factory is required")
+        return self.model_factory(**kwargs)
+
     def test_tiny_model_bf16_autocast_and_backward(self):
         device = torch.device("cuda")
-        model = make_tiny_model(gradient_checkpointing=True).to(device).train()
+        model = self.make_model(gradient_checkpointing=True).to(device).train()
         x = torch.randn(2, 6, 16, device=device, requires_grad=True)
         t = torch.tensor([0.2, 0.8], device=device)
 
@@ -178,6 +184,11 @@ class ELFCudaContractTest(unittest.TestCase):
         self.assertEqual(logits.dtype, torch.float32)
         self.assertTrue(torch.isfinite(loss))
         self.assertTrue(torch.isfinite(x.grad).all())
+
+
+@unittest.skipUnless(torch.cuda.is_available(), "CUDA is required for mixed-precision contracts")
+class ELFCudaContractTest(CudaBackboneContractMixin, unittest.TestCase):
+    model_factory = staticmethod(make_tiny_elf)
 
     def test_official_elf_b_factory_contract(self):
         device = torch.device("cuda")

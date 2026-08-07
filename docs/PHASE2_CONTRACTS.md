@@ -5,13 +5,14 @@ ELF-WONN 替换保持训练器和采样器无感知；WONN 接入后必须通过
 
 ## 运行方式
 
-完整验收需要 CUDA：
+完整验收需要 CUDA，并且不允许跳过测试：
 
 ```bash
-.venv/bin/python -m unittest discover -v
+.venv/bin/python scripts/verify_phase2.py
 ```
 
-在不可见 GPU 的沙箱内，同一命令运行 13 个 CPU 测试并跳过 2 个 CUDA 测试；这不能代替完整验收。
+CPU-only 开发检查可使用 `.venv/bin/python -m unittest discover -v`，它会运行13个 CPU 测试并
+跳过2个 CUDA 测试；这不能代替完整验收。严格脚本在 CUDA 不可见、测试少于15项或出现 skip 时失败。
 2026-08-07 在 RTX 5060 Laptop GPU 上实际运行结果为：15 tests，0 failures，0 skips。
 
 ## 契约覆盖
@@ -42,8 +43,8 @@ ELF-WONN 替换保持训练器和采样器无感知；WONN 接入后必须通过
 - continuous output：`(B, 128, 512)`，float32。
 - decoder logits：`(B, 128, 32100)`，float32。
 - 真实 ELF-B 测试使用 CUDA BF16 autocast，output head 保持 float32。
-- 模型配置 `num_self_cond_cfg_tokens > 0` 时，调用者必须传入对应 scale token，使 prefix 数量与
-  预计算 RoPE 长度一致。
+- `self_cond_cfg_scale` 保持 optional；省略时仍插入基础 self-conditioning tokens，传值时再叠加
+  scale embedding，使 prefix 数量始终与预计算 RoPE 长度一致。
 - 当前 RoPE 契约要求实际序列长度严格等于 `max_length`；padding/truncation 由 dataloader 负责。
 
 ## 边界与下一步
@@ -52,5 +53,6 @@ Phase 2 没有修改 ELF 模型、Flow Matching、mask、sampler 或 decoder 实
 测试使用标准库 `unittest`，未新增依赖。`references/WONN` 未初始化且运行时代码未从中导入。
 
 Phase 3 应先独立实现 `src/modules/wonn_layers.py`，再组装 `src/modules/wonn_model.py` 和独立
-WONN YAML。接入公共 backbone factory 后，应把 WONN 工厂加入本契约套件，并要求 ELF 与
-ELF-WONN 同时通过；不能通过放宽 shape、mask、确定性或 sampler 断言来迁就新模型。
+WONN YAML。模型和 sampler 契约已提取为可复用 mixin；接入后只需提供 WONN tiny-model factory
+和对应 `unittest.TestCase` 子类，并要求 ELF 与 ELF-WONN 同时通过。不能通过放宽 shape、mask、
+确定性或 sampler 断言来迁就新模型。

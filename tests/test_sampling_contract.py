@@ -9,45 +9,32 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from configs.config import Config, SamplingConfig
-from modules.model import ELF
+from tests.contract_factories import make_tiny_elf
 from utils.generation_utils import _dlm_decode_batch, _generate_samples_single_batch
 from utils.sampling_utils import add_noise, restore_cond, restore_vx
 
 
-def make_sampler_fixture():
-    torch.manual_seed(17)
-    model = ELF(
-        text_encoder_dim=16,
-        max_length=6,
-        hidden_size=32,
-        depth=2,
-        num_heads=4,
-        mlp_ratio=2.0,
-        bottleneck_dim=8,
-        num_time_tokens=1,
-        num_self_cond_cfg_tokens=1,
-        num_model_mode_tokens=1,
-        vocab_size=23,
-    ).eval()
-    config = Config()
-    config.max_length = 6
-    config.num_self_cond_cfg_tokens = 1
-    config.self_cond_prob = 0.5
-    config.denoiser_noise_scale = 1.0
-    config.use_bf16 = False
-    sampling_config = SamplingConfig(
-        sampling_method="ode",
-        num_sampling_steps=[2],
-        cfgs=[1],
-        self_cond_cfg_scales=[1.0],
-        time_schedule="uniform",
-    )
-    return model, config, sampling_config
+class SamplingContractMixin:
+    model_factory = None
 
-
-class SamplingContractTest(unittest.TestCase):
     def setUp(self):
-        self.model, self.config, self.sampling_config = make_sampler_fixture()
+        if self.model_factory is None:
+            raise NotImplementedError("A backbone factory is required")
+        torch.manual_seed(17)
+        self.model = self.model_factory(self_cond_tokens=1).eval()
+        self.config = Config()
+        self.config.max_length = 6
+        self.config.num_self_cond_cfg_tokens = 1
+        self.config.self_cond_prob = 0.5
+        self.config.denoiser_noise_scale = 1.0
+        self.config.use_bf16 = False
+        self.sampling_config = SamplingConfig(
+            sampling_method="ode",
+            num_sampling_steps=[2],
+            cfgs=[1],
+            self_cond_cfg_scales=[1.0],
+            time_schedule="uniform",
+        )
         self.z = torch.randn(2, 6, 16)
         self.t_steps = torch.tensor([0.0, 0.5, 1.0])
         self.cond_seq = torch.randn(2, 6, 16)
@@ -113,6 +100,10 @@ class SamplingContractTest(unittest.TestCase):
         second = self.generate(cond_seq=None, cond_mask=None)
         self.assertEqual(first.shape, self.z.shape)
         torch.testing.assert_close(first, second, rtol=0, atol=0)
+
+
+class ELFSamplingContractTest(SamplingContractMixin, unittest.TestCase):
+    model_factory = staticmethod(make_tiny_elf)
 
 
 if __name__ == "__main__":

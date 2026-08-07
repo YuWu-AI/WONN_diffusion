@@ -149,11 +149,12 @@ class ELF(nn.Module):
             self.t_emb_tokens.expand(B, -1, -1) + time_emb.unsqueeze(1)
         )
 
-        if self_cond_cfg_scale is not None and self.num_self_cond_cfg_tokens > 0:
-            sc_emb = self.self_cond_cfg_embedder(self_cond_cfg_scale)
-            prefix_tokens.append(
-                self.self_cond_cfg_tokens.expand(B, -1, -1) + sc_emb.unsqueeze(1)
-            )
+        if self.num_self_cond_cfg_tokens > 0:
+            sc_tokens = self.self_cond_cfg_tokens.expand(B, -1, -1)
+            if self_cond_cfg_scale is not None:
+                sc_emb = self.self_cond_cfg_embedder(self_cond_cfg_scale)
+                sc_tokens = sc_tokens + sc_emb.unsqueeze(1)
+            prefix_tokens.append(sc_tokens)
         return prefix_tokens
 
     def forward(
