@@ -109,5 +109,5 @@ step 2 并保存 `checkpoint_2`。
 - [x] 参数量、训练 step、显存、吞吐和 sampler latency
 - [x] 记录 8GB 环境调整和失败路径
 
-后续 Phase 2 已完成：未修改 ELF 的输入输出、mask、两种 mode、self-conditioning、确定性、
+后续 Phase 2 已完成：保持 ELF 的输入输出、mask、两种 mode、self-conditioning、确定性、
 mixed precision、backward 和 sampler shape 契约见 `docs/PHASE2_CONTRACTS.md`。

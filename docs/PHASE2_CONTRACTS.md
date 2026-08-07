@@ -1,6 +1,6 @@
 # Phase 2 ELF model contracts
 
-本文件记录 2026-08-07 在未修改 ELF backbone 上建立并验证的模型契约。目标是让后续
+本文件记录 2026-08-07 基于 ELF backbone 建立并验证的模型契约。目标是让后续
 ELF-WONN 替换保持训练器和采样器无感知；WONN 接入后必须通过同一组行为检查。
 
 ## 运行方式
@@ -49,7 +49,9 @@ CPU-only 开发检查可使用 `.venv/bin/python -m unittest discover -v`，它�
 
 ## 边界与下一步
 
-Phase 2 没有修改 ELF 模型、Flow Matching、mask、sampler 或 decoder 实现，也没有接入 WONN。
+Phase 2 没有修改 Flow Matching、mask、sampler 或 decoder，也没有接入 WONN。契约审核发现
+`self_cond_cfg_scale=None` 时缺少基础 self-conditioning tokens，导致 prefix 数量与 RoPE 长度不一致；
+`src/modules/model.py` 已做最小修复，使 optional 参数语义与现有接口一致，传入 scale 的正式路径不变。
 测试使用标准库 `unittest`，未新增依赖。`references/WONN` 未初始化且运行时代码未从中导入。
 
 Phase 3 应先独立实现 `src/modules/wonn_layers.py`，再组装 `src/modules/wonn_model.py` 和独立

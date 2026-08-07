@@ -16,7 +16,7 @@
 - WONN 的相位 \(\theta\) 和频率 \(\omega\) 只是一次 denoiser 前向调用内部的 hidden states。
 - 完整替换 ELF 的 `net(z, t, mode)`；不保留 Transformer block 或标准 attention value residual。
 - 保留 ELF 的 encoder、flow path、self-conditioning、in-context control tokens、source prefix、shared denoising/decoding、sampler 和 unembedding。
-- 第一个端到端任务确定为 WMT14 De→En；验证成立后再做 OpenWebText（OWT）主实验，最后用 XSum 做长上下文压力测试。完整训练预算仍待项目负责人确认。
+- 第一个端到端任务优先候选为 WMT14 De→En；验证成立后再做 OpenWebText（OWT）主实验，最后用 XSum 做长上下文压力测试。任务选择和完整训练预算仍待项目负责人确认。
 
 建议下一位接手者进入 Phase 3：
 
@@ -510,7 +510,7 @@ WONNDenoiser
 
 重点排除 phase collapse、output shortcut、decoder collapse 和 padding leakage，而不是追求最终 BLEU。
 
-### Phase 5：第一个端到端任务——推荐 WMT14 De→En
+### Phase 5：第一个端到端任务候选——WMT14 De→En
 
 WMT14 source 64、target 64、总长度128，适合验证 control tokens、source prefix、target-only
 supervision 和 shared decoding。固定 encoder、optimizer、flow schedule、self-conditioning、

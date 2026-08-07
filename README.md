@@ -17,7 +17,7 @@ CPU/CUDA 上通过。下一步是 Phase 3 独立实现 WONN backbone。实测结
 ```text
 .
 ├── src/                         # ELF PyTorch 训练、模型、采样和评测代码
-├── scripts/                     # 官方启动与 PPL 评测脚本
+├── scripts/                     # 官方启动、PPL 评测与 Phase 2 严格验收脚本
 ├── docs/
 │   ├── ELF_UPSTREAM_README.md   # 官方 PyTorch ELF 使用说明
 │   ├── ENVIRONMENT.md           # 已验证硬件、依赖和复现命令
@@ -28,7 +28,7 @@ CPU/CUDA 上通过。下一步是 Phase 3 独立实现 WONN backbone。实测结
 │   └── WONN.pdf
 ├── references/
 │   ├── README.md
-│   └── WONN/                    # 固定 commit 的官方 WONN submodule
+│   └── WONN/                    # 固定派生 commit 的 WONN submodule（见下方限制）
 ├── PROJECT_HANDOFF.md           # ELF-WONN 架构与开发计划
 ├── CLAUDE.md                    # 项目级 AI 协作规则（AGENTS.md 同源）
 ├── requirements.txt             # ELF PyTorch 依赖
@@ -36,9 +36,10 @@ CPU/CUDA 上通过。下一步是 Phase 3 独立实现 WONN backbone。实测结
 └── LICENSE                      # ELF 的 MIT License
 ```
 
-`src/` 当前仍是未修改的 ELF PyTorch 基线。后续 WONN 实现应新增在
-`src/modules/`，而不是从 `references/WONN/` 直接导入。训练产物统一写到
-`outputs/`，该目录不进入版本控制。
+`src/` 的模型和训练流程仍以 ELF PyTorch 为算法基线，尚未接入 WONN。Phase 1 只增加训练
+compile 开关和 profiling 日志；Phase 2 修复了 `self_cond_cfg_scale` 省略时 control-token prefix
+长度不一致的问题，外部模型契约保持不变。后续 WONN 实现应新增在 `src/modules/`，而不是从
+`references/WONN/` 直接导入。训练产物统一写到 `outputs/`，该目录不进入版本控制。
 
 ## ELF 代码导览
 
@@ -85,7 +86,9 @@ git fetch elf-upstream
 本项目 `main` 基于官方 `pytorch_elf` 分支；官方 JAX 主分支保留在本地
 `elf-jax-main`。创建本项目自己的远程仓库后，应将其命名为 `origin`。
 
-WONN 通过 Git submodule 固定。新克隆项目后执行：
+WONN 通过 Git submodule 固定在派生快照 `af3f468`（上游基点 `62d7ac5`）。该派生提交尚未发布到
+`.gitmodules` 指向的官方远程，因此全新 clone 暂时无法初始化此 submodule；在对外共享前需要将
+提交推送到可访问的 fork 并更新 `.gitmodules`。发布问题解决后，新 clone 使用：
 
 ```bash
 git submodule update --init --recursive
