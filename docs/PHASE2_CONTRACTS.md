@@ -11,9 +11,11 @@ ELF-WONN 替换保持训练器和采样器无感知；WONN 接入后必须通过
 .venv/bin/python scripts/verify_phase2.py
 ```
 
-CPU-only 开发检查可使用 `.venv/bin/python -m unittest discover -v`，它会运行13个 CPU 测试并
-跳过2个 CUDA 测试；这不能代替完整验收。严格脚本在 CUDA 不可见、测试少于15项或出现 skip 时失败。
-2026-08-07 在 RTX 5060 Laptop GPU 上实际运行结果为：15 tests，0 failures，0 skips。
+CPU-only 开发检查可使用 `.venv/bin/python -m unittest discover -v`，但它不能代替完整验收。
+Phase 2 完成时该命令运行13个 CPU 测试并跳过2个 CUDA 测试；后续阶段已继续扩展测试集。
+严格脚本在 CUDA 不可见、测试少于15项或出现 skip 时失败。2026-08-07 在 RTX 5060 Laptop GPU
+上的 Phase 2 验收结果为：15 tests，0 failures，0 skips；当前总体验收入口见
+`docs/PHASE4_LEARNABILITY.md`。
 
 ## 契约覆盖
 

@@ -11,7 +11,7 @@ baseline，或优于 ELF Transformer。
 .venv/bin/python scripts/verify_phase4.py
 ```
 
-严格入口先运行全部41项 Phase 2/3 与 harness 回归测试，要求0 failures、0 skips；随后执行：
+严格入口先运行全部回归测试，要求至少41项、0 failures、0 skips；随后执行：
 
 ```bash
 .venv/bin/python scripts/run_phase4_learnability.py \
@@ -19,9 +19,10 @@ baseline，或优于 ELF Transformer。
 ```
 
 输出 JSON 位于被 `.gitignore` 覆盖的 `outputs/`，不作为源码提交。默认实验使用正式
-`ELF-WONN-B`、BF16、gradient checkpointing、AdamW、学习率 `3e-4`；训练路径仍调用项目的
-`train_step`、gradient clipping 和 EMA。AdamW 是固定任务的 debug optimizer，不是 Phase 5
-完整训练的优化器结论。
+`ELF-WONN-B`、BF16、gradient checkpointing、AdamW、学习率 `3e-4`。三个固定 objective 和
+ELF/WONN 对照仍调用项目的 `train_step`、gradient clipping 和 EMA；synthetic conditional task
+使用直接 CE、gradient clipping 和独立 optimizer，不更新 EMA。AdamW 是固定任务的 debug
+optimizer，不是 Phase 5 完整训练的优化器结论。
 
 ## 固定任务设计
 
@@ -39,6 +40,9 @@ baseline，或优于 ELF Transformer。
 generalization。
 
 ## 实测结果
+
+2026-08-07 严格运行共发现41项回归测试，结果为0 failures、0 skips；随后15项 learnability
+gate 全部通过。
 
 | Experiment | Initial | Final | Final / initial |
 | --- | ---: | ---: | ---: |

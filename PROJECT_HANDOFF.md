@@ -393,8 +393,8 @@ W_{\mathrm{out}}
 - denoise mode 对 target clean embeddings 计算 MSE；
 - decode mode 对 target token logits 计算 CE。
 
-这是第一版实现选择，尚未得到可学性或任务质量验证。后续应加入 `phase-only`、
-`phase+omega` 和 `phase+input-residual` 消融。
+这是第一版实现选择，已通过固定任务可学性验收，但尚未得到泛化或任务质量验证。后续应加入
+`phase-only`、`phase+omega` 和 `phase+input-residual` 消融。
 
 ## 9. 第一版模型规模
 

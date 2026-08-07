@@ -93,8 +93,8 @@ output, decoder_logits = model(
 | Two-step conditional ODE + decode | source prefix 精确保持；latent 有限；IDs `(1,128)` |
 
 这些时间和显存来自单次 synthetic-input smoke，不是稳定性能基线。Mixed train step 使用确定性
-synthetic encoder 输出，以验证正式 shape 下的完整 `train_step`、optimizer 和 EMA 路径；Phase 4
-仍需使用真实 T5 embedding 做单 batch 过拟合。
+synthetic encoder 输出，以验证正式 shape 下的完整 `train_step`、optimizer 和 EMA 路径；后续
+Phase 4 已使用真实 T5 embedding 完成单 batch 过拟合。
 
 ## 初始动力学诊断
 
@@ -109,7 +109,8 @@ synthetic encoder 输出，以验证正式 shape 下的完整 `train_step`、opt
 - phase/frequency finite fraction：1.0。
 
 这些数值只证明 dynamics 被执行且初始化未发生全局 phase collapse；不能证明训练后仍稳定。frequency
-transition weights 在 gate 离开零点后才开始获得有效更新，Phase 4 必须确认 gate 和 transition 均有梯度并实际变化。
+transition weights 在 gate 离开零点后才开始获得有效更新；后续 Phase 4 已确认 gate 和 transition
+参数均实际变化，但尚未覆盖完整训练中的长期稳定性。
 
 ## 已知限制与下一步
 
