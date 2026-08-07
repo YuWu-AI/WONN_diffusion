@@ -52,7 +52,8 @@ CPU-only 开发检查可使用 `.venv/bin/python -m unittest discover -v`，它�
 Phase 2 没有修改 Flow Matching、mask、sampler 或 decoder，也没有接入 WONN。契约审核发现
 `self_cond_cfg_scale=None` 时缺少基础 self-conditioning tokens，导致 prefix 数量与 RoPE 长度不一致；
 `src/modules/model.py` 已做最小修复，使 optional 参数语义与现有接口一致，传入 scale 的正式路径不变。
-测试使用标准库 `unittest`，未新增依赖。`references/WONN` 未初始化且运行时代码未从中导入。
+测试使用标准库 `unittest`，未新增依赖。Phase 2 验收不依赖
+`references/WONN` 是否在当前 worktree 中初始化，运行时代码也未从中导入。
 
 Phase 3 已使用 `src/modules/wonn_layers.py`、`src/modules/wonn_model.py` 和独立 WONN YAML 完成
 接入。模型和 sampler 契约通过可复用 mixin 同时验证 ELF 与 ELF-WONN；没有为新模型放宽 shape、

@@ -8,4 +8,6 @@
 - 先验证官方 baseline，再实现 WONN；先做单元测试和单 batch smoke test，再启动完整训练。
 - checkpoint、日志、生成样本和本地数据不得提交，统一放入 `.gitignore` 覆盖的目录。
 
-深入设计见 `PROJECT_HANDOFF.md`，已验证环境见 `docs/ENVIRONMENT.md`，官方 ELF 命令见 `docs/ELF_UPSTREAM_README.md`。
+深入设计见 `PROJECT_HANDOFF.md`，已验证环境见 `docs/ENVIRONMENT.md`，官方 ELF 命令见
+`docs/ELF_UPSTREAM_README.md`，各阶段验收证据见 `docs/PHASE1_BASELINE.md`、
+`docs/PHASE2_CONTRACTS.md` 和 `docs/PHASE3_WONN_ELF.md`。

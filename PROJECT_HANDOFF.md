@@ -351,9 +351,9 @@ Phase velocity：
 - \(S(\theta_i)\)：接收端对该影响有多敏感；
 - \(\omega_i\)：该 oscillator 的内在漂移。
 
-### 7.2 第一版的实现默认值
+### 7.2 第一版的实现
 
-以下细节由项目负责人授权实现者按最合理方案选择。第一版建议：
+第一版已采用以下实现：
 
 - 12 coupling heads，每个 head 管理32个 oscillator channels；
 - Q/K head dimension 64，与 ELF-B 对齐；
@@ -361,9 +361,9 @@ Phase velocity：
 - 不建立384张独立 attention maps；
 - 不让全部384个 channels 只共享一张 attention map；
 - \(S\) 和 \(I\) 使用 phase-safe learnable mappings：输入 \([\sin\theta_h,\cos\theta_h]\)，输出32维；
-- 第一版使用轻量线性/两层 MLP，并用 `tanh` 限制输出幅度，避免 phase velocity 无界；
+- 使用按 head 分组的轻量线性映射，并用 `tanh` 限制输出幅度，避免 phase velocity 无界；
 - 同时实现固定三角函数 \(S(\theta)=\cos\theta, I(\theta)=\sin\theta\) 作为机制消融，而不是主模型；
-- \(\gamma_l\) 使用可学习的正值标量，初始约0.1，并限制在安全范围；具体范围应通过单 batch stability test 调整。
+- \(\gamma_l\) 使用可学习的正值标量，初始为0.1，并通过 sigmoid 限制在0.25以下。
 
 注意：真正的参数量和 FLOPs 必须从实现后的 profiler 得到，不能仅凭上述维度估算。
 
@@ -384,7 +384,7 @@ W_{\mathrm{out}}
 \right).
 \]
 
-第一版建议只从最终 phase state 读取：
+第一版只从最终 phase state 读取：
 
 - 不直接把 \(\omega^{L}\) 接到 output head，避免模型绕过 oscillator dynamics；
 - 不增加从 noisy input 到输出的直接 residual shortcut，避免高 \(t\) 区域退化成 identity mapping；
@@ -393,11 +393,12 @@ W_{\mathrm{out}}
 - denoise mode 对 target clean embeddings 计算 MSE；
 - decode mode 对 target token logits 计算 CE。
 
-这是实现默认值，不是已经用实验验证的结论。后续应加入 `phase-only`、`phase+omega` 和 `phase+input-residual` 消融。
+这是第一版实现选择，尚未得到可学性或任务质量验证。后续应加入 `phase-only`、
+`phase+omega` 和 `phase+input-residual` 消融。
 
-## 9. 建议的第一版模型规模
+## 9. 第一版模型规模
 
-为了同时控制参数和 recurrent compute，建议先实现：
+为了同时控制参数和 recurrent compute，第一版已实现：
 
 | 配置 | 值 |
 |---|---:|
@@ -471,7 +472,7 @@ BLEU 为 26.55；单 batch 训练、EMA 和 checkpoint save/load 均已验证。
 - backward 和 mixed precision；
 - sampler 对完整 source+target output shape 的要求。
 
-WONN 只能在这些测试对 ELF 基线通过后接入；同一组测试随后必须对 ELF-WONN 通过。
+该接入门槛已满足；同一组契约测试已经对 ELF-WONN 通过，并纳入 Phase 3 严格验收。
 
 ### Phase 3：实现独立 WONN backbone
 
@@ -479,20 +480,19 @@ WONN 只能在这些测试对 ELF 基线通过后接入；同一组测试随后�
 [`docs/PHASE3_WONN_ELF.md`](docs/PHASE3_WONN_ELF.md)。第一版使用384 oscillators、6 layers、
 每层2个 inner steps和12个 coupling heads；公共模型名为 `ELF-WONN-B`。
 
-实际模块边界：
+实际代码结构：
 
 ```text
-WONNDenoiser
-  InputAdapter
-    phase_projection
-    frequency_projection
+WONNELF
+  ELF control/self-conditioning preparation
+  phase_projection + frequency_projection
   [WONNLayer] x L
-    attentive_coupling
-    sensitivity_fn
-    influence_fn
-    recurrent_phase_step x T
+    AttentiveWinfreeCoupling
+      q/k token coupling
+      GroupedPhaseMap sensitivity + influence
+    recurrent phase update x T
     frequency_transition
-  PhaseReadout
+  phase_features + FinalLayer + shared token decoder
 ```
 
 `WONNELF.forward(...)` 已保持 ELF 原模型的输入输出 shape 和 mode 行为。
