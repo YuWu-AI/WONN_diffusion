@@ -416,7 +416,7 @@ def summarize_run(
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run_dir", type=Path)
-    parser.add_argument("--expected-steps", default="2000,5000,10000,20000")
+    parser.add_argument("--expected-steps", default="2000,5000,10000,15000")
     parser.add_argument("--batch-size", type=int, default=12)
     parser.add_argument("--expected-samples", type=int, default=1000)
     parser.add_argument("--warmstart-training-samples", type=int, default=0)

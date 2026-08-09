@@ -8,7 +8,7 @@ config_path="src/configs/training_configs/train_de-en_ELF-WONN-B-phase5-warmstar
 baseline_config_path="src/configs/training_configs/train_de-en_ELF-B-phase5-pilot.yml"
 baseline_checkpoint="outputs/phase5/pilot/elf_b/checkpoint_10000"
 output_dir="outputs/phase5/warmstart_hwopt/wonn_l6t8_b12"
-label="WONN warm-start 20k pipeline"
+label="WONN warm-start 15k pipeline"
 log_path="$repo_root/$output_dir/systemd.log"
 
 cd "$repo_root" || exit 2
@@ -54,7 +54,7 @@ if [ "$status" -eq 0 ] && [ ! -s "$output_dir/training_complete.json" ]; then
     status=5
 fi
 
-for step in 2000 5000 10000 20000; do
+for step in 2000 5000 10000 15000; do
     if [ "$status" -ne 0 ]; then
         break
     fi
@@ -80,7 +80,7 @@ fi
 
 if [ "$status" -eq 0 ]; then
     "$python_bin" scripts/summarize_phase5_run.py "$output_dir" \
-        --expected-steps 2000,5000,10000,20000 \
+        --expected-steps 2000,5000,10000,15000 \
         --batch-size 12 \
         --expected-samples 1000 \
         --warmstart-training-samples 40000 \
