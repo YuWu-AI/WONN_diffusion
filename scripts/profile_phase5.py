@@ -72,7 +72,6 @@ def main() -> int:
     config.global_batch_size = None
     config.batch_size = args.batch_size
     config.grad_accum_steps = 1
-    config.compile_train = False
     config.use_wandb = False
 
     device = torch.device("cuda")
@@ -124,6 +123,18 @@ def main() -> int:
     )
 
     iterator = iter(dataloader)
+    # Count eager operations before compiling. Keeping the compiled graph and
+    # an eager backward alive together can exceed memory at otherwise-stable
+    # batch sizes, while compilation does not change the mathematical work.
+    batch, iterator = _next_batch(iterator, dataloader)
+    batch = prepare_batch(batch, config, generator=generator)
+    with FlopCounterMode(display=False) as flop_counter:
+        state, _ = train_step(state, encoder=encoder, batch=batch, config=config)
+    estimated_flops = flop_counter.get_total_flops()
+
+    if config.compile_train:
+        state = state.replace(model=torch.compile(state.model))
+
     for _ in range(args.warmup_steps):
         batch, iterator = _next_batch(iterator, dataloader)
         batch = prepare_batch(batch, config, generator=generator)
@@ -144,15 +155,6 @@ def main() -> int:
     elapsed = time.perf_counter() - started
     peak_allocated = torch.cuda.max_memory_allocated(device)
     peak_reserved = torch.cuda.max_memory_reserved(device)
-
-    # PyTorch's counter covers supported tensor ops. Keep this explicitly
-    # labelled as an estimate rather than treating it as hardware FLOPs.
-    batch, iterator = _next_batch(iterator, dataloader)
-    batch = prepare_batch(batch, config, generator=generator)
-    with FlopCounterMode(display=False) as flop_counter:
-        state, _ = train_step(state, encoder=encoder, batch=batch, config=config)
-    estimated_flops = flop_counter.get_total_flops()
-    torch.cuda.synchronize()
 
     averages = {
         key: float(torch.stack([item[key] for item in metrics]).mean().cpu())
