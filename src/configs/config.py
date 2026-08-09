@@ -97,6 +97,7 @@ class Config:
     adam_b1: float = 0.9
     adam_b2: float = 0.95
     grad_accum_steps: int = 1  # Gradient accumulation steps (optimizer updates every K mini-batches)
+    max_optimizer_steps: int = None  # Optional exact optimizer-step budget; None trains all epochs.
     use_bf16: bool = True  # Use CUDA BF16 autocast for training/eval forward passes.
     use_compile: bool = False  # Wrap the eval/sampling model in torch.compile.
     compile_train: bool = True  # Wrap the training model in torch.compile.
@@ -121,6 +122,7 @@ class Config:
     log_freq: int = 100
     eval_freq: int = 10
     save_freq: float = 100  # Can be fractional (e.g., 0.1 for saving every 0.1 epoch)
+    save_optimizer_steps: str = None  # Optional comma-separated optimizer steps.
 
     # Output
     output_dir: str = "./output_dir"

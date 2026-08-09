@@ -1,4 +1,5 @@
 import json
+import os
 from typing import Dict, Optional
 
 import numpy as np
@@ -81,6 +82,7 @@ def get_dataloader(
     pad_token_id: int = 0,
     max_input_seq_length: Optional[int] = None,
     distributed: bool = True,
+    seed: Optional[int] = None,
 ):
     """Create a DataLoader."""
 
@@ -123,10 +125,19 @@ def get_dataloader(
     if distributed:
         sampler = DistributedSampler(
             dataset, num_replicas=_process_count(), rank=_process_index(),
-            shuffle=shuffle, drop_last=drop_last,
+            shuffle=shuffle, drop_last=drop_last, seed=0 if seed is None else seed,
         )
         return DataLoader(dataset, sampler=sampler, **common)
-    return DataLoader(dataset, shuffle=shuffle, **common)
+    if shuffle and seed is not None:
+        sampler = DistributedSampler(
+            dataset, num_replicas=1, rank=0, shuffle=True,
+            drop_last=False, seed=seed,
+        )
+        return DataLoader(dataset, sampler=sampler, **common)
+    generator = None
+    if seed is not None:
+        generator = torch.Generator(device="cpu").manual_seed(seed)
+    return DataLoader(dataset, shuffle=shuffle, generator=generator, **common)
 
 
 def load_jsonl_dataset(path, tokenizer, input_key="input", output_key="output"):
@@ -165,10 +176,28 @@ def load_dataset_split(path: str, dataset_cache_dir=None):
     """Load a dataset. Tries HuggingFace Hub first; falls back to local on-disk Arrow."""
     from datasets import DatasetDict, load_dataset as hf_load_dataset, load_from_disk
     ds = None
+    hub_error = None
     try:
         ds = hf_load_dataset(path, cache_dir=dataset_cache_dir)
-    except Exception:
-        ds = load_from_disk(path)
+    except Exception as exc:
+        hub_error = exc
+        if isinstance(path, str) and os.path.isdir(path):
+            ds = load_from_disk(path)
+        else:
+            from huggingface_hub import snapshot_download
+            try:
+                local_dir = snapshot_download(
+                    repo_id=path,
+                    repo_type="dataset",
+                    cache_dir=dataset_cache_dir,
+                    local_files_only=os.environ.get("HF_HUB_OFFLINE") == "1",
+                )
+                ds = load_from_disk(local_dir)
+            except Exception as snapshot_error:
+                raise RuntimeError(
+                    f"Failed to load dataset {path!r} from the Hub cache or local disk: "
+                    f"hub={hub_error}; snapshot={snapshot_error}"
+                ) from snapshot_error
 
     if isinstance(ds, DatasetDict):
         splits = list(ds.keys())

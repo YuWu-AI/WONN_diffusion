@@ -2,6 +2,7 @@
 """Training script for the ELF."""
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -79,6 +80,116 @@ def parse_args():
     )
     parser.add_argument("--use_cpu", action="store_true", help="Force CPU even when CUDA is available.")
     return parser.parse_args()
+
+
+def _resolve_step_schedule(
+    num_train_steps: int,
+    grad_accum_steps: int,
+    max_optimizer_steps,
+    save_optimizer_steps,
+):
+    """Resolve an exact optimizer-step budget and requested save points."""
+    if grad_accum_steps <= 0:
+        raise ValueError("grad_accum_steps must be positive")
+    num_optimizer_steps = num_train_steps // grad_accum_steps
+    if max_optimizer_steps is not None:
+        if max_optimizer_steps <= 0:
+            raise ValueError("max_optimizer_steps must be positive when provided")
+        num_optimizer_steps = min(num_optimizer_steps, max_optimizer_steps)
+
+    requested_steps = set()
+    if save_optimizer_steps:
+        requested_steps = {
+            int(value.strip())
+            for value in save_optimizer_steps.split(",")
+            if value.strip()
+        }
+        if any(step <= 0 or step > num_optimizer_steps for step in requested_steps):
+            raise ValueError(
+                "save_optimizer_steps must be positive and no larger than the training budget"
+            )
+    return num_optimizer_steps, num_optimizer_steps * grad_accum_steps, requested_steps
+
+
+def _resume_position(resume_step: int, steps_per_epoch: int):
+    """Map an exact train step to its epoch and in-epoch batch offset."""
+    if resume_step < 0:
+        raise ValueError("resume_step must be non-negative")
+    if steps_per_epoch <= 0:
+        raise ValueError("steps_per_epoch must be positive")
+    return divmod(resume_step, steps_per_epoch)
+
+
+def _requested_checkpoint_step(
+    global_step: int, grad_accum_steps: int, requested_optimizer_steps,
+):
+    """Return the completed requested optimizer step, or None."""
+    if global_step % grad_accum_steps != 0:
+        return None
+    optimizer_step = global_step // grad_accum_steps
+    return optimizer_step if optimizer_step in requested_optimizer_steps else None
+
+
+def _reconcile_metrics_file(metrics_path: str, resume_step: int):
+    """Keep one latest valid metric per completed step up to a resume point."""
+    summary = {"lines": 0, "kept": 0, "duplicates": 0, "discarded": 0}
+    if not os.path.isfile(metrics_path):
+        return summary
+
+    records_by_step = {}
+    with open(metrics_path, "r", encoding="utf-8") as metrics_file:
+        for line in metrics_file:
+            summary["lines"] += 1
+            try:
+                record = json.loads(line)
+                step = record["step"]
+                if isinstance(step, bool) or not isinstance(step, int):
+                    raise ValueError("metric step must be an integer")
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                summary["discarded"] += 1
+                continue
+            if step <= 0 or step > resume_step:
+                summary["discarded"] += 1
+                continue
+            if step in records_by_step:
+                summary["duplicates"] += 1
+            records_by_step[step] = record
+
+    temporary_path = f"{metrics_path}.tmp"
+    try:
+        with open(temporary_path, "w", encoding="utf-8") as metrics_file:
+            for step in sorted(records_by_step):
+                metrics_file.write(json.dumps(records_by_step[step]) + "\n")
+        os.replace(temporary_path, metrics_path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.remove(temporary_path)
+    summary["kept"] = len(records_by_step)
+    return summary
+
+
+def _finalize_training(
+    *, state, encoder, eval_dataset, tokenizer, config, generator,
+    local_batch_size: int, global_step: int,
+):
+    """Persist the terminal state and run the evaluation promised by the CLI."""
+    state.step = global_step
+    log_for_0("\n" + "=" * 60)
+    log_for_0("Final Generation")
+    log_for_0("=" * 60)
+    final_checkpoint = os.path.abspath(
+        os.path.join(config.output_dir, f"checkpoint_{global_step}")
+    )
+    if os.path.isfile(final_checkpoint):
+        log_for_0(f"Final checkpoint already exists at {final_checkpoint}")
+    else:
+        save_checkpoint(state, config.output_dir, global_step, hf_repo_id=config.hf_repo_id)
+        log_for_0(f"Final checkpoint saved to {config.output_dir}")
+    run_generation(
+        state=state, encoder=encoder, eval_dataset=eval_dataset,
+        tokenizer=tokenizer, config=config, generator=generator,
+        local_batch_size=local_batch_size,
+    )
 
 
 def run_training(config, *, force_cpu: bool = False):
@@ -195,8 +306,13 @@ def run_training(config, *, force_cpu: bool = False):
 
     # Gradient accumulation: LR schedule is parameterized in optimizer steps
     grad_accum_steps = config.grad_accum_steps
-    num_optimizer_steps = num_train_steps // grad_accum_steps
     num_warmup_optimizer_steps = num_warmup_steps // grad_accum_steps
+    num_optimizer_steps, target_train_steps, save_optimizer_steps = _resolve_step_schedule(
+        num_train_steps=num_train_steps,
+        grad_accum_steps=grad_accum_steps,
+        max_optimizer_steps=config.max_optimizer_steps,
+        save_optimizer_steps=config.save_optimizer_steps,
+    )
 
     # Effective learning rate (scaled with effective batch size, including grad accum)
     if config.lr is None or config.lr <= 0:
@@ -206,7 +322,7 @@ def run_training(config, *, force_cpu: bool = False):
 
     log_for_0(
         f"World={world} | batch local={local_batch_size}, total={total_batch_size} | "
-        f"steps/epoch={steps_per_epoch}, total_train={num_train_steps}, "
+        f"steps/epoch={steps_per_epoch}, total_train={target_train_steps}, "
         f"warmup={num_warmup_steps}, lr={config.lr:.2e}"
     )
     if grad_accum_steps > 1:
@@ -235,20 +351,23 @@ def run_training(config, *, force_cpu: bool = False):
             config.resume = config.output_dir
             log_for_0(f"Auto-resuming from {auto_ckpt}")
 
-    start_epoch, resume_step = 0, 0
-    resume_epoch_fractional = 0.0  # Fractional epoch for save-point tracking
+    resume_step = 0
     if config.resume:
         try:
             ckpt_path = config.resume
             if "checkpoint_" not in ckpt_path:
                 ckpt_path = find_latest_checkpoint(ckpt_path) or ckpt_path
             state, resume_step = load_checkpoint(ckpt_path, state)
-            resume_epoch_fractional = float(state.epoch)
-            start_epoch = int(state.epoch)
-            log_for_0(f"Resumed from step {resume_step} (epoch {resume_epoch_fractional:.2f})")
+            log_for_0(
+                f"Resumed from step {resume_step} "
+                f"(checkpoint epoch metadata {float(state.epoch):.2f})"
+            )
         except Exception as e:
-            log_for_0(f"Error loading checkpoint: {e}")
-            log_for_0("Continuing training from scratch")
+            raise RuntimeError(f"Failed to resume training from {config.resume!r}") from e
+
+    start_epoch, steps_to_skip_in_epoch = _resume_position(resume_step, steps_per_epoch)
+    resume_epoch_fractional = resume_step / steps_per_epoch
+    state.epoch = resume_epoch_fractional
 
     # torch.compile before DDP so only the inner module is compiled and
     # checkpoint I/O (which uses unwrap_model -> _orig_mod) still works.
@@ -270,6 +389,19 @@ def run_training(config, *, force_cpu: bool = False):
 
     os.makedirs(config.output_dir, exist_ok=True)
 
+    metrics_path = os.path.join(config.output_dir, "train_metrics.jsonl")
+    if rank == 0:
+        metrics_summary = _reconcile_metrics_file(metrics_path, resume_step)
+        if metrics_summary["lines"]:
+            log_for_0(
+                "Reconciled train metrics at resume step "
+                f"{resume_step}: kept={metrics_summary['kept']}, "
+                f"duplicates={metrics_summary['duplicates']}, "
+                f"discarded={metrics_summary['discarded']}"
+            )
+    if world > 1:
+        dist.barrier()
+
     if rank == 0:
         config_dict = {
             k: ([vars(sc) for sc in v] if isinstance(v, list) and v and isinstance(v[0], SamplingConfig) else v)
@@ -286,6 +418,7 @@ def run_training(config, *, force_cpu: bool = False):
         max_seq_length=config.max_length, pad_token_id=pad_token_id,
         max_input_seq_length=config.max_input_length,
         distributed=(world > 1),
+        seed=config.seed,
     )
 
     log_for_0("\n" + "=" * 60)
@@ -304,19 +437,17 @@ def run_training(config, *, force_cpu: bool = False):
     log_for_0("Starting Training")
     log_for_0("=" * 60)
 
-    if resume_step > 0:
-        global_step = resume_step
-        # Skip already-processed batches within the current epoch on resume
-        steps_to_skip_in_epoch = resume_step - start_epoch * steps_per_epoch
-    else:
-        global_step = start_epoch * steps_per_epoch
-        steps_to_skip_in_epoch = 0
+    global_step = resume_step
     state.step = global_step
+
+    if global_step >= target_train_steps:
+        log_for_0(
+            f"Training budget already reached: step {global_step} >= {target_train_steps}."
+        )
 
     last_log_step = global_step
     train_metrics = []
     last_log_time = time.time()
-
     # Track last save point for fractional save_freq; use fractional epoch from
     # checkpoint to avoid re-saving immediately after resume.
     last_save_epoch = resume_epoch_fractional if resume_step > 0 else float(start_epoch)
@@ -332,7 +463,7 @@ def run_training(config, *, force_cpu: bool = False):
             if device.type == "cuda":
                 torch.cuda.empty_cache()
 
-        if world > 1 and hasattr(train_dataloader.sampler, "set_epoch"):
+        if hasattr(train_dataloader.sampler, "set_epoch"):
             train_dataloader.sampler.set_epoch(epoch)
 
         train_iterator = iter(train_dataloader)
@@ -345,6 +476,8 @@ def run_training(config, *, force_cpu: bool = False):
         )
 
         for step_in_epoch, batch in enumerate(train_loader):
+            if global_step >= target_train_steps:
+                break
             is_first_step = step_in_epoch == 0 and epoch == start_epoch
             if is_first_step:
                 log_for_0("Performing initial training step, this may take longer...")
@@ -370,6 +503,7 @@ def run_training(config, *, force_cpu: bool = False):
                     log_for_0(f"First training step peak allocated CUDA memory: {peak_mib:.1f} MiB")
 
             global_step += 1
+            state.epoch = global_step / steps_per_epoch
             train_metrics.append(metrics)
             epoch_pbar.update(1)
 
@@ -413,10 +547,33 @@ def run_training(config, *, force_cpu: bool = False):
                             }, step=global_step)
                         except Exception:
                             pass
+                    with open(metrics_path, "a", encoding="utf-8") as metrics_file:
+                        metrics_file.write(json.dumps({
+                            "step": global_step,
+                            "optimizer_step": global_step // grad_accum_steps,
+                            "loss": avg_loss,
+                            "l2_loss": avg_l2,
+                            "ce_loss": avg_ce,
+                            "lr": current_lr,
+                            "steps_per_second": steps_per_sec,
+                        }) + "\n")
 
                 train_metrics = []
                 last_log_step = global_step
                 last_log_time = now
+
+            optimizer_step = _requested_checkpoint_step(
+                global_step, grad_accum_steps, save_optimizer_steps,
+            )
+            if optimizer_step is not None:
+                save_checkpoint(
+                    state, config.output_dir, global_step,
+                    hf_repo_id=config.hf_repo_id,
+                )
+                log_for_0(
+                    f"Saved requested optimizer-step checkpoint {optimizer_step} "
+                    f"(train step {global_step})"
+                )
 
             # Intra-epoch checkpoint saving (fractional save_freq, e.g., 0.1 epoch)
             if 0 < config.save_freq < 1:
@@ -425,6 +582,10 @@ def run_training(config, *, force_cpu: bool = False):
                     save_checkpoint(state, config.output_dir, global_step, hf_repo_id=config.hf_repo_id)
                     log_for_0(f"Saved checkpoint at epoch {progress:.2f} (step {global_step})")
                     last_save_epoch = progress
+
+        if global_step >= target_train_steps:
+            epoch_pbar.close()
+            break
 
         epoch_pbar.close()
         current_epoch = epoch + 1
@@ -443,11 +604,11 @@ def run_training(config, *, force_cpu: bool = False):
             last_log_step = global_step
             last_log_time = time.time()
 
-    log_for_0("\n" + "=" * 60)
-    log_for_0("Final Generation")
-    log_for_0("=" * 60)
-    save_checkpoint(state, config.output_dir, global_step, hf_repo_id=config.hf_repo_id)
-    log_for_0(f"Final checkpoint saved to {config.output_dir}")
+    _finalize_training(
+        state=state, encoder=encoder, eval_dataset=eval_dataset,
+        tokenizer=tokenizer, config=config, generator=g,
+        local_batch_size=local_batch_size, global_step=global_step,
+    )
     if config.use_wandb and rank == 0 and wandb is not None:
         wandb.finish()
 

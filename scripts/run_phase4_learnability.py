@@ -345,12 +345,15 @@ def main() -> int:
     parser.add_argument("--conditional-steps", type=int, default=120)
     parser.add_argument("--comparison-steps", type=int, default=40)
     parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--wonn-num-inner-steps", type=int)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.steps <= 0 or args.conditional_steps <= 0 or args.comparison_steps <= 0:
         parser.error("all step counts must be positive")
     if args.lr <= 0:
         parser.error("--lr must be positive")
+    if args.wonn_num_inner_steps is not None and args.wonn_num_inner_steps <= 0:
+        parser.error("--wonn-num-inner-steps must be positive")
 
     if not torch.cuda.is_available():
         print("Phase 4 formal learnability verification requires CUDA.", file=sys.stderr)
@@ -365,6 +368,8 @@ def main() -> int:
     config.gradient_checkpointing = True
     config.ema_decay1 = 0.9999
     config.phase4_lr = args.lr
+    if args.wonn_num_inner_steps is not None:
+        config.wonn_num_inner_steps = args.wonn_num_inner_steps
     tokenizer, batch, latents, text_encoder_dim = _build_real_batch(
         config, device, batch_size=5
     )
@@ -376,7 +381,13 @@ def main() -> int:
         "decoding": (1.0, 0, 1),
         "mixed": (0.2, 1, 5),
     }
-    results = {}
+    results = {
+        "configuration": {
+            "wonn_num_layers": config.wonn_num_layers,
+            "wonn_num_inner_steps": config.wonn_num_inner_steps,
+            "wonn_num_oscillators": config.wonn_num_oscillators,
+        }
+    }
     mixed_state = None
     for index, (name, (probability, branch_seed, batch_size)) in enumerate(
         experiments.items()

@@ -29,7 +29,7 @@ class TrainState:
     lr_scheduler: Any = None
     ema_params1: Dict[str, torch.Tensor] = field(default_factory=dict)
     step: int = 0
-    epoch: int = 0
+    epoch: float = 0.0
     dropout_generator: Optional[torch.Generator] = None
     def replace(self, **kwargs) -> "TrainState":
         new = TrainState(

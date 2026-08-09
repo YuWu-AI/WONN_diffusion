@@ -65,7 +65,7 @@ def save_checkpoint(state, output_dir: str, step: int, hf_repo_id: str = None):
         "opt_state": state.optimizer.state_dict(),
         "lr_scheduler": state.lr_scheduler.state_dict() if state.lr_scheduler is not None else None,
         "step": int(state.step),
-        "epoch": int(state.epoch),
+        "epoch": float(state.epoch),
         "dropout_rng": (state.dropout_generator.get_state()
                         if state.dropout_generator is not None else None),
         "grad_accum_buffers": grad_accum_buffers,
@@ -189,7 +189,7 @@ def load_checkpoint(checkpoint_path: str, state) -> Tuple[Any, int]:
     if state.lr_scheduler is not None and ckpt.get("lr_scheduler") is not None:
         state.lr_scheduler.load_state_dict(ckpt["lr_scheduler"])
     state.step = int(ckpt["step"])
-    state.epoch = int(ckpt["epoch"])
+    state.epoch = float(ckpt["epoch"])
     if ckpt.get("dropout_rng") is not None and state.dropout_generator is not None:
         try:
             state.dropout_generator.set_state(ckpt["dropout_rng"])

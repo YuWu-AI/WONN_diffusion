@@ -1,0 +1,163 @@
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+import torch
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+from train import (
+    _finalize_training,
+    _reconcile_metrics_file,
+    _requested_checkpoint_step,
+    _resolve_step_schedule,
+    _resume_position,
+)
+from utils.checkpoint_utils import load_checkpoint, save_checkpoint
+from utils.train_utils import TrainState
+
+
+class Phase5ScheduleTest(unittest.TestCase):
+    def test_exact_optimizer_budget_and_requested_checkpoints(self):
+        optimizer_steps, train_steps, save_steps = _resolve_step_schedule(
+            num_train_steps=1000,
+            grad_accum_steps=4,
+            max_optimizer_steps=100,
+            save_optimizer_steps="20, 50,100",
+        )
+        self.assertEqual(optimizer_steps, 100)
+        self.assertEqual(train_steps, 400)
+        self.assertEqual(save_steps, {20, 50, 100})
+
+    def test_requested_checkpoint_outside_budget_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "no larger than the training budget"):
+            _resolve_step_schedule(1000, 4, 100, "101")
+
+    def test_resume_position_uses_checkpoint_step(self):
+        self.assertEqual(_resume_position(250, 100), (2, 50))
+
+    def test_requested_checkpoint_only_fires_after_optimizer_update(self):
+        requested = {20}
+        self.assertIsNone(_requested_checkpoint_step(79, 4, requested))
+        self.assertEqual(_requested_checkpoint_step(80, 4, requested), 20)
+        self.assertIsNone(_requested_checkpoint_step(81, 4, requested))
+
+
+class Phase5MetricsTest(unittest.TestCase):
+    def test_reconcile_keeps_latest_unique_records_through_resume_step(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            metrics_path = Path(tmpdir) / "train_metrics.jsonl"
+            rows = [
+                {"step": 100, "loss": 1.0},
+                {"step": 200, "loss": 0.9},
+                {"step": 200, "loss": 0.8},
+                {"step": 300, "loss": 0.7},
+            ]
+            metrics_path.write_text(
+                "".join(json.dumps(row) + "\n" for row in rows) + "truncated",
+                encoding="utf-8",
+            )
+
+            summary = _reconcile_metrics_file(str(metrics_path), resume_step=200)
+
+            reconciled = [
+                json.loads(line) for line in metrics_path.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(reconciled, [rows[0], rows[2]])
+            self.assertEqual(
+                summary,
+                {"lines": 5, "kept": 2, "duplicates": 1, "discarded": 2},
+            )
+
+
+class Phase5FinalizationTest(unittest.TestCase):
+    @mock.patch("train.run_generation")
+    @mock.patch("train.save_checkpoint")
+    def test_finalization_saves_and_runs_generation(self, save_mock, generation_mock):
+        state = SimpleNamespace(step=0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = SimpleNamespace(output_dir=tmpdir, hf_repo_id=None)
+
+            _finalize_training(
+                state=state,
+                encoder="encoder",
+                eval_dataset="eval",
+                tokenizer="tokenizer",
+                config=config,
+                generator="generator",
+                local_batch_size=4,
+                global_step=10000,
+            )
+
+        self.assertEqual(state.step, 10000)
+        save_mock.assert_called_once_with(state, tmpdir, 10000, hf_repo_id=None)
+        generation_mock.assert_called_once_with(
+            state=state,
+            encoder="encoder",
+            eval_dataset="eval",
+            tokenizer="tokenizer",
+            config=config,
+            generator="generator",
+            local_batch_size=4,
+        )
+
+    @mock.patch("train.run_generation")
+    @mock.patch("train.save_checkpoint")
+    def test_finalization_reuses_requested_terminal_checkpoint(
+        self, save_mock, generation_mock,
+    ):
+        state = SimpleNamespace(step=10000)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "checkpoint_10000").touch()
+            config = SimpleNamespace(output_dir=tmpdir, hf_repo_id=None)
+            _finalize_training(
+                state=state,
+                encoder=None,
+                eval_dataset=None,
+                tokenizer=None,
+                config=config,
+                generator=None,
+                local_batch_size=4,
+                global_step=10000,
+            )
+
+        save_mock.assert_not_called()
+        generation_mock.assert_called_once()
+
+
+class Phase5CheckpointTest(unittest.TestCase):
+    def test_checkpoint_round_trip_preserves_fractional_epoch(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model = torch.nn.Linear(2, 2)
+            optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+            state = TrainState(
+                model=model,
+                optimizer=optimizer,
+                ema_params1=TrainState.init_ema(model),
+                step=25,
+                epoch=0.25,
+            )
+            save_checkpoint(state, tmpdir, step=25)
+
+            restored_model = torch.nn.Linear(2, 2)
+            restored_state = TrainState(
+                model=restored_model,
+                optimizer=torch.optim.AdamW(restored_model.parameters(), lr=1e-3),
+                ema_params1=TrainState.init_ema(restored_model),
+            )
+            restored_state, restored_step = load_checkpoint(
+                str(Path(tmpdir) / "checkpoint_25"), restored_state
+            )
+
+            self.assertEqual(restored_step, 25)
+            self.assertEqual(restored_state.epoch, 0.25)
+
+
+if __name__ == "__main__":
+    unittest.main()
