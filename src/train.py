@@ -2,6 +2,7 @@
 """Training script for the ELF."""
 
 import argparse
+from datetime import datetime, timezone
 import json
 import logging
 import os
@@ -169,15 +170,44 @@ def _reconcile_metrics_file(metrics_path: str, resume_step: int):
     return summary
 
 
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _write_json_marker(path: str, payload: dict):
+    """Atomically write a machine-readable run lifecycle marker."""
+    temporary_path = f"{path}.tmp"
+    try:
+        with open(temporary_path, "w", encoding="utf-8") as marker_file:
+            json.dump(payload, marker_file, ensure_ascii=False, indent=2, sort_keys=True)
+            marker_file.write("\n")
+        os.replace(temporary_path, path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.remove(temporary_path)
+
+
+def _elapsed_training_offset(metrics_path: str) -> float:
+    """Recover recorded training time so a resumed run keeps a monotonic axis."""
+    if not os.path.isfile(metrics_path):
+        return 0.0
+    latest = 0.0
+    with open(metrics_path, "r", encoding="utf-8") as metrics_file:
+        for line in metrics_file:
+            try:
+                value = float(json.loads(line).get("elapsed_training_seconds", 0.0))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+            latest = max(latest, value)
+    return latest
+
+
 def _finalize_training(
     *, state, encoder, eval_dataset, tokenizer, config, generator,
-    local_batch_size: int, global_step: int,
+    local_batch_size: int, global_step: int, training_complete_payload=None,
 ):
-    """Persist the terminal state and run the evaluation promised by the CLI."""
+    """Persist the terminal state, mark training complete, and optionally evaluate."""
     state.step = global_step
-    log_for_0("\n" + "=" * 60)
-    log_for_0("Final Generation")
-    log_for_0("=" * 60)
     final_checkpoint = os.path.abspath(
         os.path.join(config.output_dir, f"checkpoint_{global_step}")
     )
@@ -186,6 +216,22 @@ def _finalize_training(
     else:
         save_checkpoint(state, config.output_dir, global_step, hf_repo_id=config.hf_repo_id)
         log_for_0(f"Final checkpoint saved to {config.output_dir}")
+
+    if training_complete_payload is not None and _rank() == 0:
+        payload = dict(training_complete_payload)
+        payload["checkpoint"] = final_checkpoint
+        _write_json_marker(
+            os.path.join(config.output_dir, "training_complete.json"), payload,
+        )
+        log_for_0("Pure training complete; wrote training_complete.json")
+
+    if not bool(getattr(config, "final_eval", True)):
+        log_for_0("Final generation disabled; checkpoint evaluation is delegated to the run pipeline")
+        return
+
+    log_for_0("\n" + "=" * 60)
+    log_for_0("Final Generation")
+    log_for_0("=" * 60)
     run_generation(
         state=state, encoder=encoder, eval_dataset=eval_dataset,
         tokenizer=tokenizer, config=config, generator=generator,
@@ -194,6 +240,7 @@ def _finalize_training(
 
 
 def run_training(config, *, force_cpu: bool = False):
+    process_started_perf = time.perf_counter()
     _init_distributed()
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     device = torch.device("cpu") if force_cpu or not torch.cuda.is_available() else torch.device(f"cuda:{local_rank}")
@@ -357,6 +404,7 @@ def run_training(config, *, force_cpu: bool = False):
             log_for_0(f"Auto-resuming from {auto_ckpt}")
 
     resume_step = 0
+    warmstart_report = None
     if init_from:
         try:
             state, warmstart_report = load_warmstart_checkpoint(init_from, state)
@@ -416,6 +464,8 @@ def run_training(config, *, force_cpu: bool = False):
     if world > 1:
         dist.barrier()
 
+    elapsed_training_offset = _elapsed_training_offset(metrics_path) if rank == 0 else 0.0
+
     if rank == 0:
         config_dict = {
             k: ([vars(sc) for sc in v] if isinstance(v, list) and v and isinstance(v[0], SamplingConfig) else v)
@@ -453,6 +503,38 @@ def run_training(config, *, force_cpu: bool = False):
 
     global_step = resume_step
     state.step = global_step
+    training_started_perf = time.perf_counter()
+    training_started_at = _utc_now()
+
+    if rank == 0:
+        _write_json_marker(
+            os.path.join(
+                config.output_dir,
+                "training_started.json" if resume_step == 0 else "training_resumed.json",
+            ),
+            {
+                "status": "running",
+                "started_at_utc": training_started_at,
+                "resume_train_step": resume_step,
+                "target_train_step": target_train_steps,
+                "target_optimizer_step": num_optimizer_steps,
+                "batch_size_per_device": local_batch_size,
+                "world_size": world,
+                "grad_accum_steps": grad_accum_steps,
+                "effective_batch_size": total_batch_size * grad_accum_steps,
+                "model": config.model,
+                "model_parameters": total_params,
+                "device": str(device),
+                "gpu_name": torch.cuda.get_device_name(device) if device.type == "cuda" else None,
+                "gpu_total_memory_bytes": (
+                    torch.cuda.get_device_properties(device).total_memory
+                    if device.type == "cuda" else None
+                ),
+                "init_from": init_from,
+                "warmstart_report": warmstart_report,
+                "resume": config.resume,
+            },
+        )
 
     if global_step >= target_train_steps:
         log_for_0(
@@ -536,6 +618,9 @@ def run_training(config, *, force_cpu: bool = False):
                 now = time.time()
                 steps_per_sec = (global_step - last_log_step) / max(now - last_log_time, 1e-8)
                 current_lr = state.optimizer.param_groups[0]["lr"]
+                elapsed_training_seconds = (
+                    elapsed_training_offset + time.perf_counter() - training_started_perf
+                )
 
                 postfix_dict = {
                     "step": f"{global_step}", "loss": f"{avg_loss:.4f}",
@@ -570,6 +655,11 @@ def run_training(config, *, force_cpu: bool = False):
                             "ce_loss": avg_ce,
                             "lr": current_lr,
                             "steps_per_second": steps_per_sec,
+                            "samples_per_second": steps_per_sec * total_batch_size,
+                            "samples_seen": global_step * total_batch_size,
+                            "elapsed_training_seconds": elapsed_training_seconds,
+                            "elapsed_run_seconds": time.perf_counter() - process_started_perf,
+                            "timestamp_utc": _utc_now(),
                         }) + "\n")
 
                 train_metrics = []
@@ -618,10 +708,32 @@ def run_training(config, *, force_cpu: bool = False):
             last_log_step = global_step
             last_log_time = time.time()
 
+    if global_step != target_train_steps:
+        raise RuntimeError(
+            f"Training ended at step {global_step}, expected {target_train_steps}"
+        )
+
+    training_completed_at = _utc_now()
+    elapsed_training_seconds = (
+        elapsed_training_offset + time.perf_counter() - training_started_perf
+    )
     _finalize_training(
         state=state, encoder=encoder, eval_dataset=eval_dataset,
         tokenizer=tokenizer, config=config, generator=g,
         local_batch_size=local_batch_size, global_step=global_step,
+        training_complete_payload={
+            "status": "complete",
+            "started_at_utc": training_started_at,
+            "completed_at_utc": training_completed_at,
+            "completed_train_step": global_step,
+            "completed_optimizer_step": global_step // grad_accum_steps,
+            "samples_seen": global_step * total_batch_size,
+            "elapsed_training_seconds": elapsed_training_seconds,
+            "elapsed_run_seconds": time.perf_counter() - process_started_perf,
+            "init_from": init_from,
+            "warmstart_report": warmstart_report,
+            "final_evaluation_in_training_process": bool(getattr(config, "final_eval", True)),
+        },
     )
     if config.use_wandb and rank == 0 and wandb is not None:
         wandb.finish()

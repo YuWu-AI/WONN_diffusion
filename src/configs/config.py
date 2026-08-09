@@ -123,6 +123,7 @@ class Config:
     eval_freq: int = 10
     save_freq: float = 100  # Can be fractional (e.g., 0.1 for saving every 0.1 epoch)
     save_optimizer_steps: str = None  # Optional comma-separated optimizer steps.
+    final_eval: bool = True  # Run generation after saving the terminal checkpoint.
 
     # Output
     output_dir: str = "./output_dir"

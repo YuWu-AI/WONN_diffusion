@@ -11,8 +11,10 @@ import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from train import (
+    _elapsed_training_offset,
     _finalize_training,
     _reconcile_metrics_file,
     _requested_checkpoint_step,
@@ -25,6 +27,7 @@ from utils.checkpoint_utils import (
     save_checkpoint,
 )
 from utils.train_utils import TrainState
+from summarize_phase5_run import summarize_run
 
 
 class Phase5ScheduleTest(unittest.TestCase):
@@ -78,6 +81,17 @@ class Phase5MetricsTest(unittest.TestCase):
                 summary,
                 {"lines": 5, "kept": 2, "duplicates": 1, "discarded": 2},
             )
+
+    def test_elapsed_training_offset_ignores_malformed_records(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            metrics_path = Path(tmpdir) / "train_metrics.jsonl"
+            metrics_path.write_text(
+                '{"elapsed_training_seconds": 10.5}\n'
+                'not-json\n'
+                '{"elapsed_training_seconds": 25.0}\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(_elapsed_training_offset(str(metrics_path)), 25.0)
 
 
 class Phase5FinalizationTest(unittest.TestCase):
@@ -133,6 +147,40 @@ class Phase5FinalizationTest(unittest.TestCase):
 
         save_mock.assert_not_called()
         generation_mock.assert_called_once()
+
+    @mock.patch("train.run_generation")
+    @mock.patch("train.save_checkpoint")
+    def test_finalization_marks_training_before_skipping_pipeline_eval(
+        self, save_mock, generation_mock,
+    ):
+        state = SimpleNamespace(step=0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = SimpleNamespace(
+                output_dir=tmpdir, hf_repo_id=None, final_eval=False,
+            )
+            _finalize_training(
+                state=state,
+                encoder=None,
+                eval_dataset=None,
+                tokenizer=None,
+                config=config,
+                generator=None,
+                local_batch_size=4,
+                global_step=20000,
+                training_complete_payload={
+                    "status": "complete",
+                    "completed_optimizer_step": 20000,
+                },
+            )
+            marker = json.loads(
+                (Path(tmpdir) / "training_complete.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(marker["status"], "complete")
+        self.assertEqual(marker["completed_optimizer_step"], 20000)
+        self.assertEqual(marker["checkpoint"], str(Path(tmpdir) / "checkpoint_20000"))
+        save_mock.assert_called_once()
+        generation_mock.assert_not_called()
 
 
 class Phase5CheckpointTest(unittest.TestCase):
@@ -215,6 +263,109 @@ class Phase5CheckpointTest(unittest.TestCase):
 
             self.assertEqual(restored_step, 25)
             self.assertEqual(restored_state.epoch, 0.25)
+
+
+class Phase5RunSummaryTest(unittest.TestCase):
+    def test_summary_requires_complete_artifacts_and_writes_curves(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            steps = [2, 5]
+            (run_dir / "training_complete.json").write_text(
+                json.dumps({"status": "complete", "completed_optimizer_step": 5}),
+                encoding="utf-8",
+            )
+            for step in steps:
+                torch.save({
+                    "params": {"weight": torch.tensor([float(step)])},
+                    "ema_params1": {"weight": torch.tensor([float(step)])},
+                    "opt_state": {"state": {0: {"momentum": torch.tensor([0.0])}}},
+                    "step": step,
+                    "epoch": 0.0,
+                }, run_dir / f"checkpoint_{step}")
+
+            training_rows = []
+            for step in range(1, 6):
+                training_rows.append({
+                    "step": step,
+                    "optimizer_step": step,
+                    "samples_seen": step * 12,
+                    "elapsed_training_seconds": float(step),
+                    "elapsed_run_seconds": float(step + 1),
+                    "loss": 2.0 / step,
+                    "l2_loss": 1.0 / step,
+                    "ce_loss": 3.0 / step,
+                    "lr": 0.001,
+                    "steps_per_second": 4.0,
+                    "samples_per_second": 48.0,
+                    "timestamp_utc": "2026-08-09T00:00:00+00:00",
+                })
+            (run_dir / "train_metrics.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in training_rows),
+                encoding="utf-8",
+            )
+
+            for step in steps:
+                eval_dir = run_dir / "evaluations" / f"checkpoint_{step}" / "sampling"
+                eval_dir.mkdir(parents=True)
+                (eval_dir / "metrics.jsonl").write_text(
+                    json.dumps({
+                        "step": step, "bleu": float(step), "rouge1": step + 1.0,
+                        "rouge2": step + 2.0, "rougeL": step + 3.0,
+                    }) + "\n",
+                    encoding="utf-8",
+                )
+                (eval_dir / f"all_generated_0_{step}.jsonl").write_text(
+                    '{"generated": "a"}\n{"generated": "b"}\n',
+                    encoding="utf-8",
+                )
+
+            summarize_run(
+                run_dir, steps, batch_size=12, expected_samples=2,
+                verify_checkpoints=True,
+            )
+
+            self.assertTrue((run_dir / "evaluation_complete.json").is_file())
+            self.assertTrue((run_dir / "run_complete.json").is_file())
+            self.assertTrue((run_dir / "analysis" / "loss_vs_samples.svg").is_file())
+            self.assertTrue((run_dir / "analysis" / "evaluation_vs_time.svg").is_file())
+            evaluation_complete = json.loads(
+                (run_dir / "evaluation_complete.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(len(evaluation_complete["checkpoint_audits"]), 2)
+
+    def test_summary_rejects_incomplete_generated_sample_count(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            (run_dir / "training_complete.json").write_text(
+                json.dumps({"status": "complete", "completed_optimizer_step": 1}),
+                encoding="utf-8",
+            )
+            (run_dir / "checkpoint_1").write_bytes(b"checkpoint")
+            (run_dir / "train_metrics.jsonl").write_text(
+                json.dumps({
+                    "step": 1, "optimizer_step": 1, "samples_seen": 12,
+                    "elapsed_training_seconds": 1.0, "elapsed_run_seconds": 2.0,
+                    "loss": 1.0, "l2_loss": 1.0, "ce_loss": 1.0, "lr": 0.001,
+                    "steps_per_second": 4.0, "samples_per_second": 48.0,
+                    "timestamp_utc": "2026-08-09T00:00:00+00:00",
+                }) + "\n",
+                encoding="utf-8",
+            )
+            eval_dir = run_dir / "evaluations" / "checkpoint_1" / "sampling"
+            eval_dir.mkdir(parents=True)
+            (eval_dir / "metrics.jsonl").write_text(
+                json.dumps({
+                    "step": 1, "bleu": 1.0, "rouge1": 1.0,
+                    "rouge2": 1.0, "rougeL": 1.0,
+                }) + "\n",
+                encoding="utf-8",
+            )
+            (eval_dir / "all_generated_0_1.jsonl").write_text(
+                '{"generated": "only one"}\n', encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "has 1 samples, expected 2"):
+                summarize_run(run_dir, [1], batch_size=12, expected_samples=2)
 
 
 if __name__ == "__main__":
