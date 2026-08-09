@@ -213,3 +213,66 @@ def load_checkpoint(checkpoint_path: str, state) -> Tuple[Any, int]:
     step = int(ckpt["step"])
     log_for_0(f"Loaded {loaded_from} checkpoint from step {step} (epoch {state.epoch})")
     return state, step
+
+
+def load_warmstart_checkpoint(checkpoint_path: str, state) -> Tuple[Any, dict]:
+    """Load compatible model and EMA weights without restoring training state."""
+    local_path = _local_path(checkpoint_path)
+    if not os.path.exists(local_path):
+        raise ValueError(f"Warm-start checkpoint does not exist: {local_path}")
+
+    ckpt = _restore_checkpoint(local_path)
+    _validate_checkpoint(ckpt)
+    inner_model = unwrap_model(state.model)
+    current_state = inner_model.state_dict()
+    saved_state = ckpt["params"]
+
+    missing_keys = sorted(set(current_state) - set(saved_state))
+    mismatched_keys = sorted(
+        name
+        for name in set(current_state) & set(saved_state)
+        if current_state[name].shape != saved_state[name].shape
+    )
+    if missing_keys or mismatched_keys:
+        raise ValueError(
+            "Warm-start checkpoint is incompatible with the current model: "
+            f"missing={missing_keys}, shape_mismatch={mismatched_keys}"
+        )
+
+    unexpected_keys = sorted(set(saved_state) - set(current_state))
+    inner_model.load_state_dict(
+        {name: saved_state[name] for name in current_state}, strict=True
+    )
+
+    ema_src = ckpt.get("ema_params1", saved_state)
+    current_params = dict(inner_model.named_parameters())
+    missing_ema_keys = sorted(set(current_params) - set(ema_src))
+    mismatched_ema_keys = sorted(
+        name
+        for name in set(current_params) & set(ema_src)
+        if current_params[name].shape != ema_src[name].shape
+    )
+    if missing_ema_keys or mismatched_ema_keys:
+        raise ValueError(
+            "Warm-start EMA is incompatible with the current model: "
+            f"missing={missing_ema_keys}, shape_mismatch={mismatched_ema_keys}"
+        )
+    unexpected_ema_keys = sorted(set(ema_src) - set(current_params))
+    state.ema_params1 = {
+        name: ema_src[name].to(device=param.device, dtype=param.dtype)
+        for name, param in current_params.items()
+    }
+
+    state.step = 0
+    state.epoch = 0.0
+    report = {
+        "loaded_keys": len(current_state),
+        "unexpected_keys": unexpected_keys,
+        "unexpected_ema_keys": unexpected_ema_keys,
+        "source_step": int(ckpt["step"]),
+    }
+    log_for_0(
+        f"Warm-started {report['loaded_keys']} model entries from step "
+        f"{report['source_step']}; ignored {len(unexpected_keys)} obsolete entries"
+    )
+    return state, report

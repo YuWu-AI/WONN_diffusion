@@ -128,6 +128,7 @@ class Config:
     output_dir: str = "./output_dir"
     hf_repo_id: str = None  # Optional HF repo id to mirror local outputs/checkpoints.
     resume: str = None
+    init_from: str = None  # Load model/EMA weights, but start fresh optimizer and step 0.
 
     # Wandb
     use_wandb: bool = False

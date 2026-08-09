@@ -4,6 +4,10 @@
 独立 backbone 接入 ELF，保持训练器和采样器接口，并通过 forward、backward、mixed objective、
 diagnostics 和 sampler smoke；它不代表模型已经具备可学性或达到 ELF baseline 质量。
 
+2026-08-09 修正：frequency transition 现在只存在于相邻 WONN layers 之间，最后一个 phase layer
+不再创建对输出无效的 frequency 参数。当前正式模型参数量为30,028,271；下文30,472,176的历史
+验收结果对应修正前模型，但被移除的参数不参与当时的输出或 loss。
+
 ## 实现边界
 
 正式实现位于：
@@ -34,9 +38,9 @@ ELF flow/sampling step 都由当前 latent 重新确定性初始化。
 | Oscillators per head | 32 |
 | Q/K head dimension | 64 |
 | Step size | learnable positive scalar，0.1 init，0.25 upper bound |
-| Frequency transition | once per layer，zero-initialized learnable gate |
+| Frequency transition | between layers only（5次），zero-initialized learnable gate |
 | Readout | final phase only |
-| Parameters with T5 vocab 32100 | 30,472,176 |
+| Parameters with T5 vocab 32100 | 30,028,271 |
 
 Attention 只生成 token coupling weights，并计算
 `message = attention @ influence(theta)`；没有标准 Transformer V projection residual、FFN 或 noisy

@@ -19,7 +19,11 @@ from train import (
     _resolve_step_schedule,
     _resume_position,
 )
-from utils.checkpoint_utils import load_checkpoint, save_checkpoint
+from utils.checkpoint_utils import (
+    load_checkpoint,
+    load_warmstart_checkpoint,
+    save_checkpoint,
+)
 from utils.train_utils import TrainState
 
 
@@ -132,6 +136,60 @@ class Phase5FinalizationTest(unittest.TestCase):
 
 
 class Phase5CheckpointTest(unittest.TestCase):
+    def test_warmstart_loads_compatible_weights_without_training_state(self):
+        class OldModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.core = torch.nn.Linear(2, 2)
+                self.obsolete = torch.nn.Linear(2, 2)
+
+        class NewModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.core = torch.nn.Linear(2, 2)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            old_model = OldModel()
+            with torch.no_grad():
+                old_model.core.weight.fill_(3.0)
+                old_model.core.bias.fill_(4.0)
+            old_state = TrainState(
+                model=old_model,
+                optimizer=torch.optim.AdamW(old_model.parameters(), lr=1e-3),
+                ema_params1=TrainState.init_ema(old_model),
+                step=10000,
+                epoch=0.5,
+            )
+            save_checkpoint(old_state, tmpdir, step=10000)
+
+            new_model = NewModel()
+            new_optimizer = torch.optim.AdamW(new_model.parameters(), lr=2e-3)
+            new_state = TrainState(
+                model=new_model,
+                optimizer=new_optimizer,
+                ema_params1=TrainState.init_ema(new_model),
+            )
+            new_state, report = load_warmstart_checkpoint(
+                str(Path(tmpdir) / "checkpoint_10000"), new_state
+            )
+
+            torch.testing.assert_close(
+                new_state.model.core.weight,
+                torch.full_like(new_state.model.core.weight, 3.0),
+            )
+            torch.testing.assert_close(
+                new_state.ema_params1["core.bias"],
+                torch.full_like(new_state.ema_params1["core.bias"], 4.0),
+            )
+            self.assertEqual(
+                report["unexpected_keys"],
+                ["obsolete.bias", "obsolete.weight"],
+            )
+            self.assertEqual(new_state.step, 0)
+            self.assertEqual(new_state.epoch, 0.0)
+            self.assertEqual(new_state.optimizer.state_dict()["state"], {})
+            self.assertEqual(new_state.optimizer.param_groups[0]["lr"], 2e-3)
+
     def test_checkpoint_round_trip_preserves_fractional_epoch(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             model = torch.nn.Linear(2, 2)

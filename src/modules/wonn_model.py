@@ -123,8 +123,9 @@ class WONNELF(nn.Module):
                     step_max=step_max,
                     coupling_mode=coupling_mode,
                     attn_drop=attn_drop,
+                    update_frequency=layer_index < num_layers - 1,
                 )
-                for _ in range(num_layers)
+                for layer_index in range(num_layers)
             ]
         )
 

@@ -412,7 +412,7 @@ W_{\mathrm{out}}
 | Coupling evaluations per call | 12 |
 | Initial phase | Deterministic `atan2` projection |
 | Phase transition | Identity carry |
-| Frequency update | Once per layer, gated residual |
+| Frequency update | Between layers only（(L-1) 次），gated residual |
 | Output | Phase-only；完整 source+target shape，target-only supervision |
 
 选择 \(L=6,T=2\) 是为了让每次 denoiser call 的 attention/coupling evaluations 数量与12-layer ELF-B 大致相同。它不是严格 FLOP matched：\(S/I\)、frequency update、adapter 和 recurrent implementation 都会影响实际成本，必须 profiler 后再调整。

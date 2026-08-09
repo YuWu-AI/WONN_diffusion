@@ -24,7 +24,8 @@ from transformers import AutoTokenizer
 from modules.t5_encoder import get_encoder
 from utils.logging_utils import log_for_0
 from utils.checkpoint_utils import (
-    save_checkpoint, load_checkpoint, find_latest_checkpoint,
+    save_checkpoint, load_checkpoint, load_warmstart_checkpoint,
+    find_latest_checkpoint,
 )
 from utils.train_utils import (
     TrainState, prefetch_to_device, get_optimizer, create_learning_rate_fn,
@@ -344,15 +345,28 @@ def run_training(config, *, force_cpu: bool = False):
         step=0, epoch=0, dropout_generator=g,
     )
 
-    # Auto-resume: if no explicit resume path, check output_dir for existing checkpoints
-    if not config.resume:
+    init_from = getattr(config, "init_from", None)
+    if config.resume and init_from:
+        raise ValueError("resume and init_from are mutually exclusive")
+
+    # Auto-resume only when neither an explicit resume nor a warm-start was requested.
+    if not config.resume and not init_from:
         auto_ckpt = find_latest_checkpoint(config.output_dir)
         if auto_ckpt:
             config.resume = config.output_dir
             log_for_0(f"Auto-resuming from {auto_ckpt}")
 
     resume_step = 0
-    if config.resume:
+    if init_from:
+        try:
+            state, warmstart_report = load_warmstart_checkpoint(init_from, state)
+            log_for_0(
+                f"Initialized model/EMA from checkpoint step "
+                f"{warmstart_report['source_step']}; optimizer and schedule start fresh"
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to warm-start training from {init_from!r}") from e
+    elif config.resume:
         try:
             ckpt_path = config.resume
             if "checkpoint_" not in ckpt_path:
