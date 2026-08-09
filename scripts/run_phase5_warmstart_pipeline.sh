@@ -5,6 +5,8 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
 python_bin="/home/yuwu/Research/diffusion_lm/DLM_WONN/.venv/bin/python"
 python_include="/home/yuwu/miniconda3/envs/WONN/include/python3.10"
 config_path="src/configs/training_configs/train_de-en_ELF-WONN-B-phase5-warmstart-hwopt.yml"
+baseline_config_path="src/configs/training_configs/train_de-en_ELF-B-phase5-pilot.yml"
+baseline_checkpoint="outputs/phase5/pilot/elf_b/checkpoint_10000"
 output_dir="outputs/phase5/warmstart_hwopt/wonn_l6t8_b12"
 label="WONN warm-start 20k pipeline"
 log_path="$repo_root/$output_dir/systemd.log"
@@ -16,9 +18,13 @@ if [ -n "$repo_status" ]; then
     printf '%s\n' "$repo_status" >&2
     exit 3
 fi
-if [ -e "$output_dir/training_started.json" ]; then
+if [ -e "$output_dir/systemd.started" ] || [ -e "$output_dir/training_started.json" ]; then
     echo "refusing to overwrite an existing formal Phase 5 run" >&2
     exit 4
+fi
+if [ ! -s "$baseline_checkpoint" ]; then
+    echo "missing official ELF-B baseline checkpoint: $baseline_checkpoint" >&2
+    exit 5
 fi
 
 mkdir -p "$output_dir"
@@ -35,6 +41,8 @@ started_at="$(date --iso-8601=seconds)"
 printf '%s\n' "$started_at" > "$output_dir/systemd.started"
 git rev-parse HEAD > "$output_dir/source_commit"
 printf '%s\n' "$config_path" > "$output_dir/source_config"
+printf '%s\n' "$baseline_config_path" > "$output_dir/baseline_source_config"
+printf '%s\n' "$baseline_checkpoint" > "$output_dir/baseline_source_checkpoint"
 printf '%q ' "$0" > "$output_dir/command.txt"
 printf '\n' >> "$output_dir/command.txt"
 
@@ -60,10 +68,26 @@ for step in 2000 5000 10000 20000; do
 done
 
 if [ "$status" -eq 0 ]; then
+    baseline_eval_dir="$output_dir/comparisons/elf_b_checkpoint_10000"
+    "$python_bin" src/eval.py \
+        --config "$baseline_config_path" \
+        --config_override "output_dir=$baseline_eval_dir" \
+        --config_override batch_size=12 \
+        --checkpoint_path "$baseline_checkpoint" \
+        --seed 42 >> "$log_path" 2>&1
+    status=$?
+fi
+
+if [ "$status" -eq 0 ]; then
     "$python_bin" scripts/summarize_phase5_run.py "$output_dir" \
         --expected-steps 2000,5000,10000,20000 \
         --batch-size 12 \
         --expected-samples 1000 \
+        --warmstart-training-samples 40000 \
+        --baseline-eval-dir "$output_dir/comparisons/elf_b_checkpoint_10000" \
+        --baseline-checkpoint "$baseline_checkpoint" \
+        --baseline-step 10000 \
+        --baseline-training-samples 40000 \
         --verify-checkpoints >> "$log_path" 2>&1
     status=$?
 fi

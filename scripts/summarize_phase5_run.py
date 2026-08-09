@@ -138,6 +138,10 @@ def _polyline_svg(title: str, x_label: str, series: list, width=960, height=520)
         color = colors[index % len(colors)]
         coordinates = " ".join(f"{sx(x):.1f},{sy(y):.1f}" for x, y in values)
         parts.append(f'<polyline points="{coordinates}" fill="none" stroke="{color}" stroke-width="2"/>')
+        parts.extend(
+            f'<circle cx="{sx(x):.1f}" cy="{sy(y):.1f}" r="3" fill="{color}"/>'
+            for x, y in values
+        )
         legend_y = margin_top + 18 + index * 20
         parts.extend([
             f'<line x1="{legend_x}" y1="{legend_y}" x2="{legend_x + 24}" y2="{legend_y}" stroke="{color}" stroke-width="3"/>',
@@ -162,7 +166,9 @@ def _series(rows: list, x_key: str, y_keys: list) -> list:
 
 def summarize_run(
     run_dir: Path, expected_steps: list, batch_size: int, expected_samples: int,
-    verify_checkpoints: bool = False,
+    verify_checkpoints: bool = False, warmstart_training_samples: int = 0,
+    baseline_eval_dir: Path = None, baseline_checkpoint: Path = None,
+    baseline_step: int = None, baseline_training_samples: int = None,
 ):
     run_dir = run_dir.resolve()
     training_complete_path = run_dir / "training_complete.json"
@@ -224,6 +230,7 @@ def summarize_run(
             if train_row is None:
                 raise ValueError(f"no training metric row exists at checkpoint {step}")
             evaluation_rows.append({
+                "model": "ELF-WONN-B",
                 "optimizer_step": step,
                 "samples_seen": step * batch_size,
                 "elapsed_training_seconds": train_row["elapsed_training_seconds"],
@@ -231,6 +238,52 @@ def summarize_run(
                 "num_samples": generated_count,
                 **{field: metric[field] for field in required_eval_fields},
             })
+
+    baseline_evaluation = None
+    baseline_audit = None
+    baseline_arguments = (
+        baseline_eval_dir, baseline_checkpoint, baseline_step, baseline_training_samples,
+    )
+    if any(value is not None for value in baseline_arguments):
+        if not all(value is not None for value in baseline_arguments):
+            raise ValueError("all baseline arguments must be provided together")
+        baseline_eval_dir = baseline_eval_dir.resolve()
+        baseline_checkpoint = baseline_checkpoint.resolve()
+        if not baseline_checkpoint.is_file() or baseline_checkpoint.stat().st_size == 0:
+            raise FileNotFoundError(f"missing or empty baseline checkpoint {baseline_checkpoint}")
+        if verify_checkpoints:
+            baseline_audit = _audit_checkpoint(baseline_checkpoint, baseline_step)
+        metric_paths = sorted(baseline_eval_dir.glob("*/metrics.jsonl"))
+        generated_paths = sorted(
+            baseline_eval_dir.glob(f"*/all_generated_*_{baseline_step}.jsonl")
+        )
+        if len(metric_paths) != 1 or len(generated_paths) != 1:
+            raise ValueError("baseline evaluation must contain exactly one sampling run")
+        with generated_paths[0].open("r", encoding="utf-8") as generated_file:
+            generated_count = sum(1 for _ in generated_file)
+        if generated_count != expected_samples:
+            raise ValueError(
+                f"{generated_paths[0]} has {generated_count} samples, expected {expected_samples}"
+            )
+        matching = [
+            row for row in _read_jsonl(metric_paths[0])
+            if row.get("step") == baseline_step
+        ]
+        if not matching:
+            raise ValueError("baseline metrics do not contain the expected checkpoint step")
+        metric = matching[-1]
+        required_eval_fields = ("bleu", "rouge1", "rouge2", "rougeL")
+        if not all(_finite_number(metric.get(field)) for field in required_eval_fields):
+            raise ValueError("baseline evaluation contains non-finite metrics")
+        baseline_evaluation = {
+            "model": "ELF-B",
+            "checkpoint_step": baseline_step,
+            "new_samples_seen": 0,
+            "estimated_total_training_samples": baseline_training_samples,
+            "sampling_run": metric_paths[0].parent.name,
+            "num_samples": generated_count,
+            **{field: metric[field] for field in required_eval_fields},
+        }
 
     analysis_dir = run_dir / "analysis"
     training_fields = [
@@ -244,10 +297,28 @@ def summarize_run(
         training_fields,
     )
     evaluation_fields = [
-        "optimizer_step", "samples_seen", "elapsed_training_seconds", "sampling_run",
+        "model", "optimizer_step", "samples_seen", "elapsed_training_seconds", "sampling_run",
         "num_samples", "bleu", "rouge1", "rouge2", "rougeL",
     ]
     _write_csv(analysis_dir / "evaluation_metrics.csv", evaluation_rows, evaluation_fields)
+
+    comparison_rows = []
+    if baseline_evaluation is not None:
+        comparison_rows.append(baseline_evaluation)
+    comparison_rows.extend({
+        "model": row["model"],
+        "checkpoint_step": row["optimizer_step"],
+        "new_samples_seen": row["samples_seen"],
+        "estimated_total_training_samples": warmstart_training_samples + row["samples_seen"],
+        "sampling_run": row["sampling_run"],
+        "num_samples": row["num_samples"],
+        **{field: row[field] for field in ("bleu", "rouge1", "rouge2", "rougeL")},
+    } for row in evaluation_rows)
+    comparison_fields = [
+        "model", "checkpoint_step", "new_samples_seen", "estimated_total_training_samples",
+        "sampling_run", "num_samples", "bleu", "rouge1", "rouge2", "rougeL",
+    ]
+    _write_csv(analysis_dir / "comparison_metrics.csv", comparison_rows, comparison_fields)
 
     (analysis_dir / "loss_vs_samples.svg").write_text(
         _polyline_svg(
@@ -288,6 +359,36 @@ def summarize_run(
             ),
         ), encoding="utf-8",
     )
+    if baseline_evaluation is not None:
+        wonn_bleu = [
+            (row["estimated_total_training_samples"], row["bleu"])
+            for row in comparison_rows if row["model"] == "ELF-WONN-B"
+        ]
+        wonn_rouge_l = [
+            (row["estimated_total_training_samples"], row["rougeL"])
+            for row in comparison_rows if row["model"] == "ELF-WONN-B"
+        ]
+        baseline_x = baseline_evaluation["estimated_total_training_samples"]
+        (analysis_dir / "comparison_bleu.svg").write_text(
+            _polyline_svg(
+                "Initial ELF-B vs ELF-WONN-B BLEU comparison",
+                "estimated total training samples",
+                [
+                    ("ELF-B", [(baseline_x, baseline_evaluation["bleu"])]),
+                    ("ELF-WONN-B", wonn_bleu),
+                ],
+            ), encoding="utf-8",
+        )
+        (analysis_dir / "comparison_rouge_l.svg").write_text(
+            _polyline_svg(
+                "Initial ELF-B vs ELF-WONN-B ROUGE-L comparison",
+                "estimated total training samples",
+                [
+                    ("ELF-B", [(baseline_x, baseline_evaluation["rougeL"])]),
+                    ("ELF-WONN-B", wonn_rouge_l),
+                ],
+            ), encoding="utf-8",
+        )
 
     evaluation_complete = {
         "status": "complete",
@@ -296,6 +397,8 @@ def summarize_run(
         "num_samples_per_sampling_run": expected_samples,
         "checkpoint_audits": checkpoint_audits,
         "evaluations": evaluation_rows,
+        "baseline_checkpoint_audit": baseline_audit,
+        "baseline_evaluation": baseline_evaluation,
     }
     _write_json(run_dir / "evaluation_complete.json", evaluation_complete)
     run_complete = {
@@ -316,6 +419,11 @@ def main():
     parser.add_argument("--expected-steps", default="2000,5000,10000,20000")
     parser.add_argument("--batch-size", type=int, default=12)
     parser.add_argument("--expected-samples", type=int, default=1000)
+    parser.add_argument("--warmstart-training-samples", type=int, default=0)
+    parser.add_argument("--baseline-eval-dir", type=Path)
+    parser.add_argument("--baseline-checkpoint", type=Path)
+    parser.add_argument("--baseline-step", type=int)
+    parser.add_argument("--baseline-training-samples", type=int)
     parser.add_argument(
         "--verify-checkpoints", action="store_true",
         help="Reload every checkpoint and reject missing or non-finite model/EMA/optimizer state.",
@@ -327,6 +435,11 @@ def main():
     summarize_run(
         args.run_dir, expected_steps, args.batch_size, args.expected_samples,
         verify_checkpoints=args.verify_checkpoints,
+        warmstart_training_samples=args.warmstart_training_samples,
+        baseline_eval_dir=args.baseline_eval_dir,
+        baseline_checkpoint=args.baseline_checkpoint,
+        baseline_step=args.baseline_step,
+        baseline_training_samples=args.baseline_training_samples,
     )
     print(f"Phase 5 run validated and summarized: {args.run_dir.resolve()}")
 

@@ -319,19 +319,49 @@ class Phase5RunSummaryTest(unittest.TestCase):
                     encoding="utf-8",
                 )
 
+            baseline_checkpoint = run_dir / "elf_checkpoint_10"
+            torch.save({
+                "params": {"weight": torch.tensor([10.0])},
+                "ema_params1": {"weight": torch.tensor([10.0])},
+                "opt_state": {"state": {0: {"momentum": torch.tensor([0.0])}}},
+                "step": 10,
+                "epoch": 0.0,
+            }, baseline_checkpoint)
+            baseline_eval_dir = run_dir / "comparisons" / "elf_b_checkpoint_10" / "sampling"
+            baseline_eval_dir.mkdir(parents=True)
+            (baseline_eval_dir / "metrics.jsonl").write_text(
+                json.dumps({
+                    "step": 10, "bleu": 0.5, "rouge1": 2.0,
+                    "rouge2": 1.0, "rougeL": 1.5,
+                }) + "\n",
+                encoding="utf-8",
+            )
+            (baseline_eval_dir / "all_generated_0_10.jsonl").write_text(
+                '{"generated": "a"}\n{"generated": "b"}\n',
+                encoding="utf-8",
+            )
+
             summarize_run(
                 run_dir, steps, batch_size=12, expected_samples=2,
                 verify_checkpoints=True,
+                warmstart_training_samples=40,
+                baseline_eval_dir=baseline_eval_dir.parent,
+                baseline_checkpoint=baseline_checkpoint,
+                baseline_step=10,
+                baseline_training_samples=40,
             )
 
             self.assertTrue((run_dir / "evaluation_complete.json").is_file())
             self.assertTrue((run_dir / "run_complete.json").is_file())
             self.assertTrue((run_dir / "analysis" / "loss_vs_samples.svg").is_file())
             self.assertTrue((run_dir / "analysis" / "evaluation_vs_time.svg").is_file())
+            self.assertTrue((run_dir / "analysis" / "comparison_bleu.svg").is_file())
+            self.assertTrue((run_dir / "analysis" / "comparison_rouge_l.svg").is_file())
             evaluation_complete = json.loads(
                 (run_dir / "evaluation_complete.json").read_text(encoding="utf-8")
             )
             self.assertEqual(len(evaluation_complete["checkpoint_audits"]), 2)
+            self.assertEqual(evaluation_complete["baseline_evaluation"]["model"], "ELF-B")
 
     def test_summary_rejects_incomplete_generated_sample_count(self):
         with tempfile.TemporaryDirectory() as tmpdir:
