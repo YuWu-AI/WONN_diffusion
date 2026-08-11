@@ -191,6 +191,7 @@ class WONNLayer(nn.Module):
         step_max: float = 0.25,
         coupling_mode: str = "learned",
         attn_drop: float = 0.0,
+        update_frequency: bool = True,
     ):
         super().__init__()
         if num_inner_steps <= 0:
@@ -200,6 +201,7 @@ class WONNLayer(nn.Module):
         self.num_oscillators = num_oscillators
         self.num_inner_steps = num_inner_steps
         self.step_max = step_max
+        self.update_frequency = update_frequency
         raw_step = math.log(step_init / (step_max - step_init))
         self.raw_step = nn.Parameter(torch.tensor(raw_step, dtype=torch.float32))
         self.coupling = AttentiveWinfreeCoupling(
@@ -209,12 +211,19 @@ class WONNLayer(nn.Module):
             coupling_mode=coupling_mode,
             attn_drop=attn_drop,
         )
-        transition_width = 3 * num_oscillators
-        self.frequency_norm = RMSNorm(transition_width)
-        self.frequency_transition = _make_linear(
-            transition_width, num_oscillators, bias=True
-        )
-        self.frequency_gate = nn.Parameter(torch.zeros((), dtype=torch.float32))
+        if update_frequency:
+            transition_width = 3 * num_oscillators
+            self.frequency_norm = RMSNorm(transition_width)
+            self.frequency_transition = _make_linear(
+                transition_width, num_oscillators, bias=True
+            )
+            self.frequency_gate = nn.Parameter(
+                torch.zeros((), dtype=torch.float32)
+            )
+        else:
+            self.frequency_norm = None
+            self.frequency_transition = None
+            self.frequency_gate = None
 
     @property
     def step_size(self) -> torch.Tensor:
@@ -252,12 +261,17 @@ class WONNLayer(nn.Module):
                     coupling_diagnostics["coupling_message_rms"]
                 )
 
-        transition_input = torch.cat([phase_features(theta), omega], dim=-1)
-        frequency_delta = torch.tanh(
-            self.frequency_transition(self.frequency_norm(transition_input))
-        )
-        frequency_update = torch.tanh(self.frequency_gate).to(omega.dtype) * frequency_delta
-        omega = omega + frequency_update
+        if self.update_frequency:
+            transition_input = torch.cat([phase_features(theta), omega], dim=-1)
+            frequency_delta = torch.tanh(
+                self.frequency_transition(self.frequency_norm(transition_input))
+            )
+            frequency_update = (
+                torch.tanh(self.frequency_gate).to(omega.dtype) * frequency_delta
+            )
+            omega = omega + frequency_update
+        else:
+            frequency_update = torch.zeros_like(omega)
 
         diagnostics: Dict[str, torch.Tensor] = {}
         if collect_diagnostics:

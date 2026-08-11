@@ -7,8 +7,7 @@
 - 模型替换必须保持 `src/modules/model.py` 现有的输入输出契约，使训练器和采样器不感知 backbone 类型。
 - 先验证官方 baseline，再实现 WONN；先做单元测试和单 batch smoke test，再启动完整训练。
 - checkpoint、日志、生成样本和本地数据不得提交，统一放入 `.gitignore` 覆盖的目录。
+- 云端实验必须从 clean commit 启动，并记录配置、依赖、数据 revision、硬件和随机种子。
 
-深入设计见 `PROJECT_HANDOFF.md`，已验证环境见 `docs/ENVIRONMENT.md`，官方 ELF 命令见
-`docs/ELF_UPSTREAM_README.md`，各阶段验收证据见 `docs/PHASE1_BASELINE.md`、
-`docs/PHASE2_CONTRACTS.md`、`docs/PHASE3_WONN_ELF.md` 和
-`docs/PHASE4_LEARNABILITY.md`。
+项目技术基线见 `PROJECT_HANDOFF.md`，新 Phase 1–3 计划见 `docs/RESEARCH_PLAN.md`；已验证环境和
+官方 ELF 命令分别见 `docs/ENVIRONMENT.md` 与 `docs/ELF_UPSTREAM_README.md`。

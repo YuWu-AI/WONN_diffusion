@@ -52,6 +52,27 @@ class WONNModelTest(unittest.TestCase):
                 first_diagnostics[key], second_diagnostics[key], rtol=0, atol=0
             )
 
+    def test_frequency_transition_exists_only_between_layers(self):
+        model = make_tiny_wonn(depth=3)
+
+        for layer in model.layers[:-1]:
+            self.assertTrue(layer.update_frequency)
+            self.assertIsNotNone(layer.frequency_norm)
+            self.assertIsNotNone(layer.frequency_transition)
+            self.assertIsNotNone(layer.frequency_gate)
+
+        final_layer = model.layers[-1]
+        self.assertFalse(final_layer.update_frequency)
+        self.assertIsNone(final_layer.frequency_norm)
+        self.assertIsNone(final_layer.frequency_transition)
+        self.assertIsNone(final_layer.frequency_gate)
+
+        final_prefix = f"layers.{len(model.layers) - 1}.frequency_"
+        final_frequency_parameters = [
+            name for name, _ in model.named_parameters() if name.startswith(final_prefix)
+        ]
+        self.assertEqual(final_frequency_parameters, [])
+
 
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required for the formal WONN contract")
 class WONNFormalCudaTest(unittest.TestCase):
@@ -71,7 +92,7 @@ class WONNFormalCudaTest(unittest.TestCase):
             max_length=128,
             vocab_size=32100,
         ).to(device).train()
-        self.assertEqual(sum(p.numel() for p in model.parameters()), 30_472_176)
+        self.assertEqual(sum(p.numel() for p in model.parameters()), 30_028_271)
 
         x = torch.randn(1, 128, 1024, device=device, requires_grad=True)
         t = torch.tensor([0.5], device=device)

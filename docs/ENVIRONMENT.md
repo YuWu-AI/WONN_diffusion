@@ -1,4 +1,4 @@
-# Phase 0 environment
+# 已验证本机环境
 
 本文件记录 2026-08-06 在当前工作站完成验证的 ELF PyTorch 环境。它描述已验证事实，
 不代表论文指标已经复现。
@@ -54,16 +54,16 @@ uv pip sync --python .venv/bin/python requirements-lock.txt
 - 输入固定为 `(1, 128, 1024)`（包含 self-conditioning channel concat）；
 - continuous output：`(1, 128, 512)`；
 - decoder logits：`(1, 128, 32128)`；真实 T5 tokenizer/checkpoint 使用 32100，正式 baseline
-  参数量为104,579,940，详见 `docs/PHASE1_BASELINE.md`；
+  参数量为104,579,940，详见 [`PROJECT_HANDOFF.md`](../PROJECT_HANDOFF.md)；
 - 两次顺序前向约 0.134 秒，峰值 allocated memory 约 493.3 MiB。
 
 时间和显存数字来自单次未预热随机前向，只用于环境 sanity check，不能作为正式性能基线。
 
-## Known contract and remaining work
+## 输入契约说明
 
 ELF 的 RoPE 按配置 `max_length` 预计算。直接传入短于 `max_length` 的未 padding 序列会发生
-位置维度不匹配；正式 dataloader 会把序列 pad/truncate 到配置长度。后续模型契约测试必须使用
-该真实输入约束。
+位置维度不匹配；正式 dataloader 会把序列 pad/truncate 到配置长度。模型契约测试必须使用该真实
+输入约束。
 
-Phase 0 没有下载官方 ELF checkpoint 或数据集，也没有运行训练 step、BLEU、PPL 或完整 sampler。
-这些属于 Phase 1 baseline reproduction，不能把随机前向解释为论文结果复现。
+本环境快照当时只完成随机前向 sanity check；此后官方 ELF checkpoint、training smoke、sampler
+和 validation evaluation 已完成，结论统一见 [`PROJECT_HANDOFF.md`](../PROJECT_HANDOFF.md)。

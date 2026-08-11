@@ -1,0 +1,179 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "ELF-WONN 核心算法简报",
+    "description": "聚焦当前 ELF-WONN 实现中振荡器 backbone 的状态、耦合动力学与读出过程。",
+    "generatedAt": "2026-08-09T20:20:50+08:00",
+    "cards": [],
+    "charts": [
+      {
+        "id": "layer_update_schedule",
+        "title": "层间频率更新日程",
+        "subtitle": "L1–L5 之后各更新一次，L6 之后不再更新；每层均含 2 个相位 inner steps",
+        "type": "bar",
+        "dataset": "layer_update_schedule",
+        "sourceId": "wonn_schedule_source",
+        "encodings": {
+          "x": {
+            "field": "layer",
+            "type": "ordinal",
+            "label": "WONN 层"
+          },
+          "y": {
+            "field": "frequency_transitions",
+            "type": "quantitative",
+            "label": "层后频率更新次数",
+            "format": "number"
+          },
+          "tooltip": [
+            {
+              "field": "phase_inner_steps",
+              "type": "quantitative",
+              "label": "层内相位更新次数",
+              "format": "number"
+            }
+          ]
+        },
+        "yAxisTitle": "层后频率更新次数",
+        "valueFormat": "number",
+        "layout": "full"
+      }
+    ],
+    "tables": [],
+    "sources": [
+      {
+        "id": "wonn_model_source",
+        "label": "WONN 模型主体",
+        "path": "src/modules/wonn_model.py"
+      },
+      {
+        "id": "wonn_layers_source",
+        "label": "WONN 动力学层",
+        "path": "src/modules/wonn_layers.py"
+      },
+      {
+        "id": "wonn_config_source",
+        "label": "ELF-WONN-B 正式配置",
+        "path": "src/configs/training_configs/train_de-en_ELF-WONN-B.yml"
+      },
+      {
+        "id": "wonn_schedule_source",
+        "label": "逐层更新日程",
+        "path": "src/modules/wonn_model.py"
+      },
+      {
+        "id": "phase3_doc_source",
+        "label": "Phase 3 WONN-ELF 结构说明",
+        "path": "docs/PHASE3_WONN_ELF.md"
+      }
+    ],
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "body": "# ELF-WONN 核心算法简报"
+      },
+      {
+        "id": "technical_summary",
+        "type": "markdown",
+        "sourceId": "wonn_model_source",
+        "body": "## 技术摘要\n\nELF-WONN 用 **Winfree 振荡器动力学完整替换 ELF 的 Transformer denoiser backbone**，但不改变 ELF 的连续 latent、Flow Matching 或采样接口。每次 denoiser 前向都会把当前 token hidden state 确定性地初始化为相位 `θ` 与内在频率 `ω`；相位在 attentive Winfree coupling 下快速演化，频率只在相邻层之间慢速更新，最终仅从相位的周期特征 `[sin θ, cos θ]` 读出结果。\n\n正式 `ELF-WONN-B` 为：每个 token **384 个振荡器**、**12 个 coupling heads**、**6 层 × 每层 2 个 inner steps**，因此每次前向进行 **12 次 coupling evaluation**；层间共有 **5 次 frequency transition**。"
+      },
+      {
+        "id": "state_and_flow",
+        "type": "markdown",
+        "sourceId": "wonn_model_source",
+        "body": "## 1. 状态表示与确定性初始化\n\n对 batch 中第 `i` 个 token，WONN 的内部状态为\n\n```text\nθ_i, ω_i ∈ R^K,    K = 384\nP(θ_i) = [sin θ_i, cos θ_i] ∈ R^(2K)\n```\n\nELF 的输入、时间 token、self-conditioning/CFG token 和 mode token 先按原接口组成 hidden sequence `H`。归一化后，用两个投影初始化：\n\n```text\n(a_i,k, b_i,k) = W_θ H_i\nθ_i,k^0 = atan2(b_i,k, a_i,k)\nω_i^0 = W_ω H_i\n```\n\n每个 `(a,b)` 对会先单位化，再用 `atan2` 得到相位。初始化不引入随机数；下一次 flow/sampling step 会从新的当前 latent 重新计算 `(θ,ω)`，不会跨 denoiser 调用携带隐藏状态。\n\n**整体路径：** `ELF hidden H → (θ⁰,ω⁰) → L 个 WONN layers → final phase features → ELF-compatible output`。"
+      },
+      {
+        "id": "attentive_dynamics",
+        "type": "markdown",
+        "sourceId": "wonn_layers_source",
+        "body": "## 2. Attentive Winfree 单步动力学\n\n384 个振荡器被分成 12 组，每个 head 管理 32 个通道。对第 `l` 层、第 `s` 个 inner step，先从周期特征计算带 RoPE 的 query/key：\n\n```text\nA_i,j,h = softmax_j( q_i,h · k_j,h / sqrt(d_qk) )\n```\n\n注意力 `A` 只表示 token 间的耦合权重。每个 head 再从相位产生接收端敏感度 `S` 和发送端影响 `I`：\n\n```text\nS_i,h = tanh(W_h^S [sin θ_i,h, cos θ_i,h] + b_h^S)\nI_j,h = tanh(W_h^I [sin θ_j,h, cos θ_j,h] + b_h^I)\nm_i,h = Σ_j A_i,j,h I_j,h\nv_i,h = ω_i,h + S_i,h ⊙ m_i,h\n```\n\n最后用有界、可学习步长推进相位：\n\n```text\nγ_l = γ_max · sigmoid(r_l),    γ_l 初值 0.1，γ_max = 0.25\nθ_i,h ← wrap(θ_i,h + γ_l v_i,h),    wrap 范围为 [-π, π]\n```\n\npadding mask 直接作用在 `A` 上。这里没有 Transformer 的 value projection residual，也没有 FFN；attention 只参数化 Winfree coupling，真正改变状态的是上面的相位方程。"
+      },
+      {
+        "id": "slow_frequency_and_readout",
+        "type": "markdown",
+        "sourceId": "wonn_layers_source",
+        "body": "## 3. 快相位、慢频率与 phase-only 读出\n\n一个 WONN layer 内，`ω` 在 2 个 inner steps 中保持不变；完成相位迭代后，仅在还存在下一层时执行 gated residual frequency transition：\n\n```text\nδω^l = tanh(W_ω^l RMSNorm([sin θ^l, cos θ^l, ω^l]))\nω^(l+1) = ω^l + tanh(g_l) · δω^l\nθ^(l+1,0) = θ^(l,T)\n```\n\n`g_l` 从 0 初始化，因此模型训练初期近似固定内在频率，之后再学习跨层的慢速变化。相位在层边界直接传递，不经过额外坐标变换。最后一层之后不再更新 `ω`，因为输出只读取最终相位：\n\n```text\nH_out = [sin θ^(L,T), cos θ^(L,T)]\ny_continuous = FinalLayer(H_out)\ny_decode = Unembed(GELU(H_out W_proj + b_proj))    # 仅 decode mode\n```\n\n控制 token 在动力学中参与耦合，但读出前会被移除；返回的 continuous output 与 decoder logits 仍保持 ELF 原有 shape 和 dtype 契约。"
+      },
+      {
+        "id": "layer_update_schedule_block",
+        "type": "chart",
+        "chartId": "layer_update_schedule",
+        "layout": "full"
+      },
+      {
+        "id": "pseudocode",
+        "type": "markdown",
+        "sourceId": "wonn_model_source",
+        "body": "## 4. 精简伪代码\n\n```text\nH, mask, n_ctrl = PrepareELFSequence(x, t, self_cond, mode)\nθ, ω = DeterministicInit(H)\n\nfor l = 1 ... L:\n    for s = 1 ... T:\n        A = MaskedAttention(P(θ), RoPE)\n        message = A @ Influence(P(θ))\n        velocity = ω + Sensitivity(P(θ)) * message\n        θ = wrap(θ + step_l * velocity)\n\n    if l < L:\n        ω = ω + gated_frequency_delta(P(θ), ω)\n\nH_out = P(θ)[:, n_ctrl:]\nreturn ContinuousHead(H_out), OptionalDecodeHead(H_out)\n```"
+      },
+      {
+        "id": "scope_and_boundaries",
+        "type": "markdown",
+        "sourceId": "phase3_doc_source",
+        "body": "## 5. 汇报时必须明确的边界\n\n- **定位：** WONN 是 denoiser backbone，不是新的 latent space；`θ/ω` 只存在于一次前向内部。\n- **机制：** attention 只产生耦合权重，没有标准 `A·V` residual 或 FFN。\n- **核心归纳偏置：** `θ` 每个 inner step 更新，`ω` 只在层间更新，最终仅从相位读出。\n- **比较边界：** 12 次 coupling evaluation 只是结构次数对齐，不能直接推出 FLOPs、延迟或任务质量更优。"
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-08-09T20:20:50+08:00",
+    "status": "ready",
+    "datasets": {
+      "layer_update_schedule": [
+        {"layer": "L1", "phase_inner_steps": 2, "frequency_transitions": 1},
+        {"layer": "L2", "phase_inner_steps": 2, "frequency_transitions": 1},
+        {"layer": "L3", "phase_inner_steps": 2, "frequency_transitions": 1},
+        {"layer": "L4", "phase_inner_steps": 2, "frequency_transitions": 1},
+        {"layer": "L5", "phase_inner_steps": 2, "frequency_transitions": 1},
+        {"layer": "L6", "phase_inner_steps": 2, "frequency_transitions": 0}
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "wonn_model_source",
+      "label": "WONN 模型主体",
+      "path": "src/modules/wonn_model.py"
+    },
+    {
+      "id": "wonn_layers_source",
+      "label": "WONN 动力学层",
+      "path": "src/modules/wonn_layers.py"
+    },
+    {
+      "id": "wonn_schedule_source",
+      "label": "逐层更新日程",
+      "path": "src/modules/wonn_model.py",
+      "query": {
+        "engine": "sqlite",
+        "language": "sql",
+        "executed_at": "2026-08-09T20:20:50+08:00",
+        "description": "将正式 L=6、T=2 配置和相邻层 frequency transition 规则整理为逐层更新日程。",
+        "sql": "WITH layer_schedule(layer, phase_inner_steps, frequency_transitions) AS (VALUES ('L1',2,1),('L2',2,1),('L3',2,1),('L4',2,1),('L5',2,1),('L6',2,0)) SELECT layer, phase_inner_steps, frequency_transitions FROM layer_schedule ORDER BY layer;",
+        "filters": [
+          "正式 ELF-WONN-B 配置：L=6，T=2",
+          "frequency transition 仅存在于相邻 WONN layers 之间"
+        ],
+        "metric_definitions": {
+          "phase_inner_steps": "每个 WONN layer 内相位更新的次数。",
+          "frequency_transitions": "完成该层后执行频率 transition 的次数；最后一层之后为 0。"
+        }
+      }
+    },
+    {
+      "id": "wonn_config_source",
+      "label": "ELF-WONN-B 正式配置",
+      "path": "src/configs/training_configs/train_de-en_ELF-WONN-B.yml"
+    },
+    {
+      "id": "phase3_doc_source",
+      "label": "Phase 3 WONN-ELF 结构说明",
+      "path": "docs/PHASE3_WONN_ELF.md"
+    }
+  ]
+}
