@@ -31,15 +31,19 @@ class Config:
     # Dataset
     data_path: str = None
     eval_data_path: str = None
+    data_revision: str = None
+    eval_data_revision: str = None
     max_length: int = 128
     max_input_length: int = None  # Max length for conditioning input (e.g., prompt or encoder input); None = no limit
     pad_token: str = "pad"  # "pad" or "eos" - which token to use for padding
 
     # Tokenizer
     tokenizer_name: str = None  # Defaults to encoder_model_name if not set
+    tokenizer_revision: str = None
 
     # Encoder
     encoder_model_name: str = "t5-small"
+    encoder_revision: str = None
     encoder_checkpoint: str = None
     latent_mean: float = 0.0
     latent_std: float = 1.0

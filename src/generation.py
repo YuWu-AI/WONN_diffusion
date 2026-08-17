@@ -38,6 +38,11 @@ def _world() -> int:
     return dist.get_world_size() if dist.is_initialized() else 1
 
 
+def _sync_for_timing(device: torch.device):
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+
 def _build_eval_model(state, use_compile: bool = False) -> nn.Module:
     """Return an eval-mode model copy loaded with EMA params (if available)."""
     model = unwrap_model(state.model)
@@ -164,22 +169,26 @@ def test_generation_uncond(
                                  generator=generator, dtype=param_dtype)
                      * config.denoiser_noise_scale).to(device)
 
-            gen_start = time.time()
+            _sync_for_timing(device)
+            gen_start = time.perf_counter()
             latent = _generate_samples_single_batch(
                 model=model, generator=generator, z=z, t_steps=t_steps,
                 cond_seq=None, cond_seq_mask=None,
                 config=config, sampling_config=sampling_config,
                 cfg_scale=cfg_scale, self_cond_cfg_scale=self_cond_cfg_scale,
             )
-            generation_time += time.time() - gen_start
+            _sync_for_timing(device)
+            generation_time += time.perf_counter() - gen_start
 
-            dec_start = time.time()
+            _sync_for_timing(device)
+            dec_start = time.perf_counter()
             t_final_val = t_steps[-1].item()
             predicted_ids = _dlm_decode_batch(
                 z=latent, model=model, t_final_val=t_final_val,
                 config=config, self_cond_cfg_scale=self_cond_cfg_scale,
             )
-            decode_time += time.time() - dec_start
+            _sync_for_timing(device)
+            decode_time += time.perf_counter() - dec_start
 
             predicted_ids = mask_after_eos(predicted_ids, eos_token_id=eos_token_id, pad_token_id=pad_token_id)
 
@@ -357,19 +366,22 @@ def test_generation_cond(
                              generator=generator, dtype=next(model.parameters()).dtype)
                  * config.denoiser_noise_scale).to(device)
 
-            gen_start = time.time()
+            _sync_for_timing(device)
+            gen_start = time.perf_counter()
             latent = _generate_samples_single_batch(
                 model=model, generator=generator, z=z, t_steps=t_steps,
                 cond_seq=cond_seq, cond_seq_mask=cond_seq_mask_arr,
                 config=config, sampling_config=sampling_config,
                 cfg_scale=cfg_scale, self_cond_cfg_scale=self_cond_cfg_scale,
             )
-            generation_time += time.time() - gen_start
+            _sync_for_timing(device)
+            generation_time += time.perf_counter() - gen_start
 
             gen_length = config.max_length - config.max_input_length
             cond_len_per_sample = cond_seq_mask_arr.to(torch.int32).sum(dim=1)
 
-            dec_start = time.time()
+            _sync_for_timing(device)
+            dec_start = time.perf_counter()
             t_final_val = t_steps[-1].item()
             predicted_ids = _dlm_decode_batch(
                 z=latent, model=model, t_final_val=t_final_val,
@@ -377,7 +389,8 @@ def test_generation_cond(
             )
             predicted_ids = shift_left(predicted_ids, cond_len_per_sample, 0)[:, :gen_length]
             predicted_ids = mask_after_eos(predicted_ids, eos_token_id=eos_token_id, pad_token_id=pad_token_id)
-            decode_time += time.time() - dec_start
+            _sync_for_timing(device)
+            decode_time += time.perf_counter() - dec_start
 
             original_texts = [batch["target"][i] for i in range(bsz)]
             context_texts = [batch["input"][i] for i in range(bsz)]
@@ -406,7 +419,12 @@ def test_generation_cond(
             out_path = os.path.join(config.output_dir, name, f"all_generated_{epoch_val}_{step_val}.jsonl")
             with open(out_path, "w", encoding="utf-8") as f:
                 for tid, orig, gen, ctx in all_generated:
-                    f.write(json.dumps({"id": tid, "generated": gen}, ensure_ascii=False) + "\n")
+                    f.write(json.dumps({
+                        "id": tid,
+                        "source": ctx,
+                        "reference": orig,
+                        "generated": gen,
+                    }, ensure_ascii=False) + "\n")
             log_for_0(f"Saved {len(all_generated)} generated texts to {out_path}")
             upload_output_dir_to_hf(config.output_dir, config.hf_repo_id, reason="generation")
 
@@ -435,7 +453,23 @@ def test_generation_cond(
                         f"generation/{name}/rougeL": cond_eval_results["rougeL"],
                     })
             if cond_eval_results is not None:
-                metrics_line = {"epoch": epoch_val, "step": step_val, **cond_eval_results}
+                peak_cuda_mib = (
+                    torch.cuda.max_memory_allocated(device) / (1024 ** 2)
+                    if device.type == "cuda" else None
+                )
+                metrics_line = {
+                    "epoch": epoch_val,
+                    "step": step_val,
+                    "num_samples": len(all_generated),
+                    "generation_seconds": generation_time,
+                    "decode_seconds": decode_time,
+                    "samples_per_second": (
+                        len(all_generated) / max(generation_time + decode_time, 1e-8)
+                    ),
+                    "timing_scope": "cuda_synchronized_sampler_and_decoder",
+                    "peak_allocated_cuda_mib": peak_cuda_mib,
+                    **cond_eval_results,
+                }
                 with open(os.path.join(config.output_dir, name, "metrics.jsonl"), "a", encoding="utf-8") as f:
                     f.write(json.dumps(metrics_line, ensure_ascii=False) + "\n")
                 upload_output_dir_to_hf(config.output_dir, config.hf_repo_id, reason="generation metrics")

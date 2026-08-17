@@ -291,14 +291,20 @@ def run_training(config, *, force_cpu: bool = False):
         torch.backends.cudnn.allow_tf32 = True
 
     log_for_0("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name or config.encoder_model_name)
+    tokenizer = AutoTokenizer.from_pretrained(
+        config.tokenizer_name or config.encoder_model_name,
+        revision=getattr(config, "tokenizer_revision", None),
+    )
     pad_token_id = get_pad_token_id(tokenizer, config.pad_token)
     log_for_0(f"Using {'EOS' if config.pad_token == 'eos' else 'PAD'} token for padding: {pad_token_id}")
 
     train_dataset, eval_dataset = load_dataset(config)
 
     log_for_0(f"Loading Encoder config: {config.encoder_model_name}...")
-    encoder_config, encoder = get_encoder(config.encoder_model_name, torch.float32)
+    encoder_config, encoder = get_encoder(
+        config.encoder_model_name, torch.float32,
+        revision=getattr(config, "encoder_revision", None),
+    )
     encoder = encoder.to(device).eval()
     for p in encoder.parameters():
         p.requires_grad_(False)
@@ -574,13 +580,12 @@ def run_training(config, *, force_cpu: bool = False):
         for step_in_epoch, batch in enumerate(train_loader):
             if global_step >= target_train_steps:
                 break
-            is_first_step = step_in_epoch == 0 and epoch == start_epoch
-            if is_first_step:
-                log_for_0("Performing initial training step, this may take longer...")
             # Skip already-processed batches when resuming mid-epoch
             if epoch == start_epoch and step_in_epoch < steps_to_skip_in_epoch:
                 continue
+            is_first_step = global_step == resume_step
             if is_first_step:
+                log_for_0("Performing initial training step, this may take longer...")
                 first_step_start = time.perf_counter()
                 if device.type == "cuda":
                     torch.cuda.reset_peak_memory_stats(device)
@@ -717,6 +722,10 @@ def run_training(config, *, force_cpu: bool = False):
     elapsed_training_seconds = (
         elapsed_training_offset + time.perf_counter() - training_started_perf
     )
+    peak_allocated_cuda_mib = (
+        torch.cuda.max_memory_allocated(device) / (1024 ** 2)
+        if device.type == "cuda" else None
+    )
     _finalize_training(
         state=state, encoder=encoder, eval_dataset=eval_dataset,
         tokenizer=tokenizer, config=config, generator=g,
@@ -728,6 +737,11 @@ def run_training(config, *, force_cpu: bool = False):
             "completed_train_step": global_step,
             "completed_optimizer_step": global_step // grad_accum_steps,
             "samples_seen": global_step * total_batch_size,
+            "effective_batch_size": total_batch_size * grad_accum_steps,
+            "model": config.model,
+            "model_parameters": total_params,
+            "gpu_name": torch.cuda.get_device_name(device) if device.type == "cuda" else None,
+            "peak_allocated_cuda_mib": peak_allocated_cuda_mib,
             "elapsed_training_seconds": elapsed_training_seconds,
             "elapsed_run_seconds": time.perf_counter() - process_started_perf,
             "init_from": init_from,

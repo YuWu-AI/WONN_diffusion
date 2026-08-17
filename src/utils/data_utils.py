@@ -172,13 +172,13 @@ def _looks_like_save_to_disk_arrow(ds) -> bool:
     )
 
 
-def load_dataset_split(path: str, dataset_cache_dir=None):
+def load_dataset_split(path: str, dataset_cache_dir=None, revision: str = None):
     """Load a dataset. Tries HuggingFace Hub first; falls back to local on-disk Arrow."""
     from datasets import DatasetDict, load_dataset as hf_load_dataset, load_from_disk
     ds = None
     hub_error = None
     try:
-        ds = hf_load_dataset(path, cache_dir=dataset_cache_dir)
+        ds = hf_load_dataset(path, cache_dir=dataset_cache_dir, revision=revision)
     except Exception as exc:
         hub_error = exc
         if isinstance(path, str) and os.path.isdir(path):
@@ -190,6 +190,7 @@ def load_dataset_split(path: str, dataset_cache_dir=None):
                     repo_id=path,
                     repo_type="dataset",
                     cache_dir=dataset_cache_dir,
+                    revision=revision,
                     local_files_only=os.environ.get("HF_HUB_OFFLINE") == "1",
                 )
                 ds = load_from_disk(local_dir)
@@ -211,7 +212,10 @@ def load_dataset_split(path: str, dataset_cache_dir=None):
             f"Dataset at {path!r} looks like a save_to_disk-format HF repo; "
             f"re-downloading via snapshot_download + load_from_disk."
         )
-        local_dir = snapshot_download(repo_id=path, repo_type="dataset", cache_dir=dataset_cache_dir)
+        local_dir = snapshot_download(
+            repo_id=path, repo_type="dataset", cache_dir=dataset_cache_dir,
+            revision=revision,
+        )
         ds = load_from_disk(local_dir)
         if isinstance(ds, DatasetDict):
             splits = list(ds.keys())
@@ -226,12 +230,17 @@ def load_dataset_split(path: str, dataset_cache_dir=None):
 def load_dataset(config, dataset_cache_dir=None):
     """Resolve config.data_path / config.eval_data_path into train/eval datasets."""
     log_for_0(f"Loading dataset from {config.data_path}...")
-    train_dataset = load_dataset_split(config.data_path, dataset_cache_dir)
+    train_dataset = load_dataset_split(
+        config.data_path, dataset_cache_dir, getattr(config, "data_revision", None),
+    )
     log_for_0(f"Train size: {len(train_dataset)}")
 
     eval_dataset = None
     if config.eval_data_path:
-        eval_dataset = load_dataset_split(config.eval_data_path, dataset_cache_dir)
+        eval_dataset = load_dataset_split(
+            config.eval_data_path, dataset_cache_dir,
+            getattr(config, "eval_data_revision", None),
+        )
         log_for_0(f"Eval size: {len(eval_dataset)}")
     else:
         log_for_0("No eval dataset")

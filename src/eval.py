@@ -99,7 +99,10 @@ def main():
     log_for_0(f"Seeds to evaluate: {seed_list}")
 
     log_for_0("Loading tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name or config.encoder_model_name)
+    tokenizer = AutoTokenizer.from_pretrained(
+        config.tokenizer_name or config.encoder_model_name,
+        revision=getattr(config, "tokenizer_revision", None),
+    )
     pad_token_id = get_pad_token_id(tokenizer, config.pad_token)
     log_for_0(f"Using {'EOS' if config.pad_token == 'eos' else 'PAD'} token for padding: {pad_token_id}")
 
@@ -112,12 +115,18 @@ def main():
                 input_key="input", output_key="output",
             )
         else:
-            eval_dataset = load_dataset_split(config.eval_data_path)
+            eval_dataset = load_dataset_split(
+                config.eval_data_path,
+                revision=getattr(config, "eval_data_revision", None),
+            )
         log_for_0(f"Eval dataset size: {len(eval_dataset)}")
 
     # Encoder (HuggingFace T5)
     log_for_0(f"Loading Encoder: {config.encoder_model_name}...")
-    encoder_config, encoder = get_encoder(config.encoder_model_name, torch.float32)
+    encoder_config, encoder = get_encoder(
+        config.encoder_model_name, torch.float32,
+        revision=getattr(config, "encoder_revision", None),
+    )
     encoder = encoder.to(device).eval()
     for p in encoder.parameters():
         p.requires_grad_(False)
