@@ -5,6 +5,7 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
 common_git_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)"
 main_checkout="$(dirname "$common_git_dir")"
 python_bin="${DLM_WONN_PYTHON:-$main_checkout/.venv/bin/python}"
+pipeline_checks=("$python_bin" scripts/phase5_pipeline_checks.py)
 run_root="outputs/phase5/mechanism50k"
 data_root="data/phase5_mechanism"
 config_root="src/configs/training_configs/phase5_mechanism"
@@ -77,7 +78,7 @@ if ! flock -n 9; then
     exit 7
 fi
 
-source_commit="$(git rev-parse HEAD)"
+runner_commit="$(git rev-parse HEAD)"
 manifest_path="$run_root/experiment_manifest.json"
 if [ ! -s "$manifest_path" ]; then
     manifest_command=(
@@ -90,10 +91,22 @@ if [ ! -s "$manifest_path" ]; then
     done
     "${manifest_command[@]}"
 fi
-manifest_commit="$($python_bin -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' "$manifest_path")"
-if [ "$manifest_commit" != "$source_commit" ]; then
-    echo "experiment manifest uses commit $manifest_commit, current commit is $source_commit" >&2
-    exit 8
+experiment_commit="$($python_bin -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' "$manifest_path")"
+if [ "$experiment_commit" != "$runner_commit" ]; then
+    if ! git merge-base --is-ancestor "$experiment_commit" "$runner_commit"; then
+        echo "experiment commit $experiment_commit is not an ancestor of runner $runner_commit" >&2
+        exit 8
+    fi
+    while IFS= read -r changed_path; do
+        case "$changed_path" in
+            scripts/run_phase5_mechanism_pipeline.sh|scripts/phase5_pipeline_checks.py|tests/test_phase5_mechanism_pipeline.py)
+                ;;
+            *)
+                echo "refusing to resume: non-pipeline file changed since experiment commit: $changed_path" >&2
+                exit 8
+                ;;
+        esac
+    done < <(git diff --name-only "$experiment_commit" "$runner_commit" --)
 fi
 
 if [ ! -s "$run_root/pipeline_started.json" ]; then
@@ -101,14 +114,88 @@ if [ ! -s "$run_root/pipeline_started.json" ]; then
 import json,sys
 from datetime import datetime,timezone
 json.dump({"status":"running","started_at":datetime.now(timezone.utc).isoformat(),"source_commit":sys.argv[2]},open(sys.argv[1],"w"),indent=2)
-' "$run_root/pipeline_started.json" "$source_commit"
+' "$run_root/pipeline_started.json" "$experiment_commit"
 else
     recorded_commit="$($python_bin -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' "$run_root/pipeline_started.json")"
-    if [ "$recorded_commit" != "$source_commit" ]; then
-        echo "existing run uses commit $recorded_commit, current commit is $source_commit" >&2
+    if [ "$recorded_commit" != "$experiment_commit" ]; then
+        echo "existing run uses commit $recorded_commit, manifest uses $experiment_commit" >&2
         exit 9
     fi
 fi
+
+pipeline_status="$run_root/pipeline_status.json"
+pipeline_stage="initializing"
+pipeline_completed=0
+
+write_pipeline_status() {
+    local status="$1"
+    local exit_code="${2:-}"
+    local command=(
+        "${pipeline_checks[@]}" status "$pipeline_status" "$status"
+        "$experiment_commit" "$runner_commit" "$pipeline_stage" "$$"
+    )
+    if [ -n "$exit_code" ]; then
+        command+=(--exit-code "$exit_code")
+    fi
+    "${command[@]}"
+}
+
+set_stage() {
+    pipeline_stage="$1"
+    write_pipeline_status running
+}
+
+record_pipeline_exit() {
+    local status=$?
+    trap - EXIT
+    set +e
+    if [ "$status" -ne 0 ] && [ "$pipeline_completed" -ne 1 ]; then
+        write_pipeline_status failed "$status"
+    fi
+    exit "$status"
+}
+trap record_pipeline_exit EXIT
+write_pipeline_status running
+
+run_logged_with_retries() {
+    local attempts="$1"
+    local description="$2"
+    local log_path="$3"
+    shift 3
+
+    local attempt status=1
+    for ((attempt = 1; attempt <= attempts; attempt++)); do
+        if "$@" >> "$log_path" 2>&1; then
+            return 0
+        else
+            status=$?
+        fi
+        printf '%s failed (attempt %d/%d, status=%d)\n' \
+            "$description" "$attempt" "$attempts" "$status" \
+            | tee -a "$log_path" >&2
+        if [ "$attempt" -lt "$attempts" ]; then
+            sleep "$((attempt * 5))"
+        fi
+    done
+    return "$status"
+}
+
+training_is_complete() {
+    local completion="$1"
+    [ -s "$completion" ] && "$python_bin" -c '
+import json,sys
+payload=json.load(open(sys.argv[1]))
+raise SystemExit(0 if payload.get("status") == "complete" and payload.get("completed_optimizer_step") == 50000 else 1)
+' "$completion"
+}
+
+run_training_attempt() {
+    local config_path="$1"
+    local output_dir="$2"
+    /usr/bin/time -v -o "$output_dir/process_resources.txt" \
+        "$python_bin" src/train.py --config "$config_path"
+    training_is_complete "$output_dir/training_complete.json"
+}
 
 run_training() {
     local label="$1"
@@ -116,30 +203,52 @@ run_training() {
     local output_dir="$3"
     local completion="$output_dir/training_complete.json"
     mkdir -p "$output_dir"
-    if [ -s "$completion" ]; then
-        local completed_step
-        completed_step="$($python_bin -c 'import json,sys; print(json.load(open(sys.argv[1])).get("completed_optimizer_step",-1))' "$completion")"
-        if [ "$completed_step" -eq 50000 ]; then
-            echo "$label training already complete"
-            return
-        fi
+    if training_is_complete "$completion"; then
+        echo "$label training already complete"
+        return
     fi
-    printf '%s\n' "$source_commit" > "$output_dir/source_commit"
+    printf '%s\n' "$experiment_commit" > "$output_dir/source_commit"
+    printf '%s\n' "$runner_commit" > "$output_dir/runner_commit"
     printf '%s\n' "$config_path" > "$output_dir/source_config"
     sha256sum "$config_path" > "$output_dir/source_config.sha256"
     echo "training $label to 50k"
-    /usr/bin/time -v -o "$output_dir/process_resources.txt" \
-        "$python_bin" src/train.py --config "$config_path" \
-        >> "$output_dir/pipeline.log" 2>&1
-    if [ ! -s "$completion" ]; then
-        echo "$label did not produce training_complete.json" >&2
-        exit 10
+    if ! run_logged_with_retries 3 "$label training" "$output_dir/pipeline.log" \
+        run_training_attempt "$config_path" "$output_dir"; then
+        echo "$label training failed or did not reach optimizer step 50000" >&2
+        return 10
     fi
-    completed_step="$($python_bin -c 'import json,sys; print(json.load(open(sys.argv[1])).get("completed_optimizer_step",-1))' "$completion")"
-    if [ "$completed_step" -ne 50000 ]; then
-        echo "$label stopped at optimizer step $completed_step instead of 50000" >&2
-        exit 11
-    fi
+}
+
+validate_checkpoints() {
+    local label="$1"
+    local output_dir="$2"
+    local step checkpoint
+    for step in "${checkpoint_steps[@]}"; do
+        checkpoint="$output_dir/checkpoint_$step"
+        if ! "${pipeline_checks[@]}" checkpoint "$checkpoint"; then
+            echo "$label checkpoint is missing or invalid: $checkpoint" >&2
+            return 11
+        fi
+    done
+}
+
+run_evaluation_attempt() {
+    local label="$1"
+    local config_path="$2"
+    local checkpoint="$3"
+    local temporary="$4"
+    local step="$5"
+    local samples="$6"
+    "$python_bin" src/eval.py \
+        --config "$config_path" \
+        --config_override "output_dir=$temporary" \
+        --config_override "num_samples=$samples" \
+        --config_override "batch_size=16" \
+        --config_override "online_eval=true" \
+        --checkpoint_path "$checkpoint" \
+        --seed 42
+    "${pipeline_checks[@]}" finalize-evaluation \
+        "$temporary" "$label" "$step" "$samples"
 }
 
 evaluate_checkpoint() {
@@ -151,13 +260,13 @@ evaluate_checkpoint() {
     local checkpoint="$output_dir/checkpoint_$step"
     local eval_dir="$output_dir/evaluations/checkpoint_$step"
     local temporary="${eval_dir}.in_progress"
-    if [ -s "$eval_dir/evaluation_complete.json" ]; then
+    if "${pipeline_checks[@]}" evaluation "$eval_dir" "$label" "$step" "$samples"; then
         echo "$label checkpoint $step full evaluation already complete"
         return
     fi
-    if [ ! -d "$checkpoint" ]; then
-        echo "missing checkpoint: $checkpoint" >&2
-        exit 12
+    if ! "${pipeline_checks[@]}" checkpoint "$checkpoint"; then
+        echo "missing or invalid checkpoint: $checkpoint" >&2
+        return 12
     fi
     if [ -e "$eval_dir" ]; then
         local preserved="${eval_dir}.incomplete.$(date -u +%Y%m%dT%H%M%SZ)"
@@ -170,24 +279,35 @@ evaluate_checkpoint() {
         mv "$temporary" "$preserved"
     fi
     mkdir -p "$temporary"
-    "$python_bin" src/eval.py \
-        --config "$config_path" \
-        --config_override "output_dir=$temporary" \
-        --config_override "num_samples=$samples" \
-        --config_override "batch_size=16" \
-        --checkpoint_path "$checkpoint" \
-        --seed 42 >> "$output_dir/pipeline.log" 2>&1
-    local generated
-    generated="$(find "$temporary" -type f -name "all_generated_*_${step}.jsonl" -print -quit)"
-    if [ -z "$generated" ] || [ "$(wc -l < "$generated")" -ne "$samples" ]; then
-        echo "$label checkpoint $step evaluation is incomplete" >&2
-        exit 13
+    if ! run_logged_with_retries 3 "$label checkpoint $step evaluation" \
+        "$output_dir/pipeline.log" run_evaluation_attempt \
+        "$label" "$config_path" "$checkpoint" "$temporary" "$step" "$samples"; then
+        echo "$label checkpoint $step evaluation failed; artifacts retained in $temporary" >&2
+        return 13
     fi
-    "$python_bin" -c '
-import json,sys
-json.dump({"status":"complete","model":sys.argv[2],"step":int(sys.argv[3]),"num_samples":int(sys.argv[4])},open(sys.argv[1],"w"),indent=2)
-' "$temporary/evaluation_complete.json" "$label" "$step" "$samples"
     mv "$temporary" "$eval_dir"
+}
+
+run_diagnostic_attempt() {
+    local label="$1"
+    local config_path="$2"
+    local checkpoint="$3"
+    local diagnostic_dir="$4"
+    local samples="$5"
+    local dataset_path="$6"
+    "$python_bin" scripts/diagnose_phase5_checkpoint.py \
+        --root . \
+        --output-dir "$diagnostic_dir" \
+        --num-samples "$samples" \
+        --batch-size 16 \
+        --seed 42 \
+        --model-spec "$label|$config_path|$checkpoint" \
+        --dataset-path "$dataset_path" \
+        --dataset-revision "aee21115965ee2b9d3d6d02ec2a72f4f998476d9" \
+        --t-values "0,0.05,0.15,0.3,0.5,0.75" \
+        --rollout-starts "0,0.25,0.5,0.75" \
+        --overwrite
+    "${pipeline_checks[@]}" diagnostic "$diagnostic_dir/diagnostics.json" "$label"
 }
 
 diagnose_checkpoint() {
@@ -201,40 +321,34 @@ diagnose_checkpoint() {
         samples=256
     fi
     local diagnostic_dir="$output_dir/diagnostics/checkpoint_$step/$split"
-    if [ -s "$diagnostic_dir/diagnostics.json" ]; then
-        local status
-        status="$($python_bin -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status"))' "$diagnostic_dir/diagnostics.json")"
-        if [ "$status" = complete ]; then
-            echo "$label checkpoint $step $split diagnostics already complete"
-            return
-        fi
+    if "${pipeline_checks[@]}" diagnostic "$diagnostic_dir/diagnostics.json" "$label"; then
+        echo "$label checkpoint $step $split diagnostics already complete"
+        return
     fi
     local dataset_path="$data_root/heldout"
     if [ "$split" = train ]; then
         dataset_path="$data_root/train"
     fi
-    "$python_bin" scripts/diagnose_phase5_checkpoint.py \
-        --root . \
-        --output-dir "$diagnostic_dir" \
-        --num-samples "$samples" \
-        --batch-size 16 \
-        --seed 42 \
-        --model-spec "$label|$config_path|$output_dir/checkpoint_$step" \
-        --dataset-path "$dataset_path" \
-        --dataset-revision "aee21115965ee2b9d3d6d02ec2a72f4f998476d9" \
-        --t-values "0,0.05,0.15,0.3,0.5,0.75" \
-        --rollout-starts "0,0.25,0.5,0.75" \
-        --overwrite \
-        >> "$output_dir/pipeline.log" 2>&1
+    if ! run_logged_with_retries 3 "$label checkpoint $step $split diagnostics" \
+        "$output_dir/pipeline.log" run_diagnostic_attempt \
+        "$label" "$config_path" "$output_dir/checkpoint_$step" \
+        "$diagnostic_dir" "$samples" "$dataset_path"; then
+        echo "$label checkpoint $step $split diagnostics failed" >&2
+        return 14
+    fi
 }
 
 for index in "${!labels[@]}"; do
     label="${labels[$index]}"
     config_path="${configs[$index]}"
     output_dir="${run_dirs[$index]}"
+    set_stage "$label training"
     run_training "$label" "$config_path" "$output_dir"
+    validate_checkpoints "$label" "$output_dir"
     for step in "${checkpoint_steps[@]}"; do
+        set_stage "$label checkpoint $step train diagnostics"
         diagnose_checkpoint "$label" "$config_path" "$output_dir" "$step" train
+        set_stage "$label checkpoint $step heldout diagnostics"
         diagnose_checkpoint "$label" "$config_path" "$output_dir" "$step" heldout
     done
     for step in "${full_eval_steps[@]}"; do
@@ -242,10 +356,12 @@ for index in "${!labels[@]}"; do
         if [ "$step" -eq 50000 ]; then
             samples=1000
         fi
+        set_stage "$label checkpoint $step evaluation"
         evaluate_checkpoint "$label" "$config_path" "$output_dir" "$step" "$samples"
     done
 done
 
+set_stage "summarizing experiment"
 "$python_bin" scripts/summarize_phase5_mechanism.py \
     --root "$run_root" \
     --output-dir "$run_root/analysis"
@@ -256,9 +372,13 @@ done
 "$python_bin" -c '
 import json,sys
 from datetime import datetime,timezone
-json.dump({"status":"complete","completed_at":datetime.now(timezone.utc).isoformat(),"source_commit":sys.argv[2],"analysis":sys.argv[3],"report":sys.argv[4]},open(sys.argv[1],"w"),indent=2)
-' "$run_root/pipeline_complete.json" "$source_commit" "$run_root/analysis/mechanism_summary.json" "$run_root/analysis/report.html"
+json.dump({"status":"complete","completed_at":datetime.now(timezone.utc).isoformat(),"source_commit":sys.argv[2],"runner_commit":sys.argv[3],"analysis":sys.argv[4],"report":sys.argv[5]},open(sys.argv[1],"w"),indent=2)
+' "$run_root/pipeline_complete.json" "$experiment_commit" "$runner_commit" "$run_root/analysis/mechanism_summary.json" "$run_root/analysis/report.html"
+
+pipeline_stage="complete"
+write_pipeline_status complete
+pipeline_completed=1
 
 if command -v notify-send >/dev/null 2>&1; then
-    notify-send "DLM-WONN Phase 5" "Mechanism sandbox pipeline completed"
+    notify-send "DLM-WONN Phase 5" "Mechanism sandbox pipeline completed" || true
 fi
