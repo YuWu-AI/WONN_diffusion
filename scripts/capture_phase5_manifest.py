@@ -53,6 +53,13 @@ def build_manifest(repo_root: Path, config_paths: list[Path]) -> dict:
             "batch_size": payload.get("batch_size"),
             "max_optimizer_steps": payload.get("max_optimizer_steps"),
         }
+        data_manifest = payload.get("data_manifest_path")
+        if data_manifest:
+            manifest_path = repo_root / data_manifest
+            if not manifest_path.is_file():
+                raise FileNotFoundError(f"missing data manifest: {manifest_path}")
+            configs[path.name]["data_manifest_path"] = data_manifest
+            configs[path.name]["data_manifest_sha256"] = _sha256(manifest_path)
     required_pins = (
         "data_revision", "eval_data_revision", "encoder_revision",
         "tokenizer_revision",

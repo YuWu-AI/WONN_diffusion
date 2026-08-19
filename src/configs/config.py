@@ -33,6 +33,7 @@ class Config:
     eval_data_path: str = None
     data_revision: str = None
     eval_data_revision: str = None
+    data_manifest_path: str = None
     max_length: int = 128
     max_input_length: int = None  # Max length for conditioning input (e.g., prompt or encoder input); None = no limit
     pad_token: str = "pad"  # "pad" or "eos" - which token to use for padding
@@ -73,6 +74,16 @@ class Config:
     denoiser_noise_scale: float = 1.0
     t_eps: float = 5e-2
     time_schedule: str = "logit_normal"  # 'logit_normal' or 'uniform'
+
+    # Optional semantic supervision on denoiser-predicted x0. Defaults preserve
+    # the original Flow Matching training path without extra RNG or forwards.
+    denoiser_token_loss_weight: float = 0.0
+    denoiser_source_contrastive_weight: float = 0.0
+    denoiser_aux_max_t: float = 0.25
+    denoiser_aux_start_step: int = 0
+    denoiser_aux_warmup_steps: int = 0
+    denoiser_source_contrastive_prob: float = 1.0
+    denoiser_source_contrastive_margin: float = 0.1
 
     # Decoder objective
     decoder_prob: float = 0.5  # Probability of decoder (CE) step vs denoiser (L2) step

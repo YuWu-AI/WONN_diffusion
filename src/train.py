@@ -35,6 +35,10 @@ from utils.train_utils import (
 from generation import run_generation
 from configs.config import load_config_from_yaml, apply_config_overrides, load_sampling_configs, SamplingConfig
 from modules.model_factory import build_model
+from modules.denoiser_objectives import (
+    denoiser_objectives_enabled,
+    validate_denoiser_objective_config,
+)
 from utils.data_utils import get_dataloader, prepare_batch, load_dataset, get_pad_token_id
 from train_step import train_step
 
@@ -240,6 +244,7 @@ def _finalize_training(
 
 
 def run_training(config, *, force_cpu: bool = False):
+    validate_denoiser_objective_config(config)
     process_started_perf = time.perf_counter()
     _init_distributed()
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
@@ -609,17 +614,65 @@ def run_training(config, *, force_cpu: bool = False):
             epoch_pbar.update(1)
 
             if global_step % config.log_freq == 0:
-                stacked = torch.stack([
-                    torch.stack([m["loss"] for m in train_metrics]).mean(),
-                    torch.stack([m["l2_loss"] for m in train_metrics]).mean(),
-                    torch.stack([m["ce_loss"] for m in train_metrics]).mean(),
-                ])
+                loss_mean = torch.stack([m["loss"] for m in train_metrics]).mean()
+                metric_totals = {
+                    key: torch.stack([m[key] for m in train_metrics]).sum()
+                    for key in (
+                        "l2_loss_sum", "l2_token_count",
+                        "ce_loss_sum", "ce_token_count",
+                    )
+                }
+                stacked = torch.stack([loss_mean, *metric_totals.values()])
                 # Average each metric across DDP ranks before logging — done
                 # once per log_freq so we never sync on every train step.
                 if dist.is_available() and dist.is_initialized():
                     dist.all_reduce(stacked, op=dist.ReduceOp.SUM)
                     stacked = stacked / dist.get_world_size()
-                avg_loss, avg_l2, avg_ce = (float(x) for x in stacked.tolist())
+                reduced = dict(zip(("loss", *metric_totals), stacked.tolist()))
+                avg_loss = float(reduced["loss"])
+                avg_l2 = float(reduced["l2_loss_sum"]) / max(
+                    float(reduced["l2_token_count"]), 1.0
+                )
+                avg_ce = float(reduced["ce_loss_sum"]) / max(
+                    float(reduced["ce_token_count"]), 1.0
+                )
+                aux_log = {}
+                if denoiser_objectives_enabled(config):
+                    aux_totals = {
+                        key: torch.stack([
+                            m.get(key, torch.zeros_like(m["loss"]))
+                            for m in train_metrics
+                        ]).sum()
+                        for key in (
+                            "token_loss_sum", "token_count",
+                            "contrastive_loss_sum", "contrastive_count",
+                            "aux_example_count",
+                        )
+                    }
+                    aux_means = torch.stack([
+                        torch.stack([
+                            m.get("aux_loss", torch.zeros_like(m["loss"]))
+                            for m in train_metrics
+                        ]).mean(),
+                        torch.stack([
+                            m.get("aux_scale", torch.zeros_like(m["loss"]))
+                            for m in train_metrics
+                        ]).mean(),
+                        *aux_totals.values(),
+                    ])
+                    if dist.is_available() and dist.is_initialized():
+                        dist.all_reduce(aux_means, op=dist.ReduceOp.SUM)
+                        aux_means[:2] = aux_means[:2] / dist.get_world_size()
+                    aux_values = aux_means.tolist()
+                    aux_log = {
+                        "aux_loss": float(aux_values[0]),
+                        "aux_scale": float(aux_values[1]),
+                        "token_loss": float(aux_values[2]) / max(float(aux_values[3]), 1.0),
+                        "source_contrastive_loss": (
+                            float(aux_values[4]) / max(float(aux_values[5]), 1.0)
+                        ),
+                        "aux_examples": float(aux_values[6]),
+                    }
                 now = time.time()
                 steps_per_sec = (global_step - last_log_step) / max(now - last_log_time, 1e-8)
                 current_lr = state.optimizer.param_groups[0]["lr"]
@@ -632,27 +685,38 @@ def run_training(config, *, force_cpu: bool = False):
                     "l2": f"{avg_l2:.4f}", "ce": f"{avg_ce:.4f}",
                     "sps": f"{steps_per_sec:.1f}", "lr": f"{current_lr:.2e}",
                 }
+                if aux_log:
+                    postfix_dict["aux"] = f"{aux_log['aux_loss']:.4f}"
                 log_for_0(postfix_dict)
                 epoch_pbar.set_postfix(**postfix_dict)
 
                 if rank == 0:
+                    aux_message = (
+                        f", aux={aux_log['aux_loss']:.4f}, token={aux_log['token_loss']:.4f}, "
+                        f"source={aux_log['source_contrastive_loss']:.4f}"
+                        if aux_log else ""
+                    )
                     tqdm.write(
                         f"INFO - engine - Step {global_step}: loss={avg_loss:.4f}, "
-                        f"l2={avg_l2:.4f}, ce={avg_ce:.4f}, "
+                        f"l2={avg_l2:.4f}, ce={avg_ce:.4f}{aux_message}, "
                         f"lr={current_lr:.2e}, steps/sec={steps_per_sec:.2f}"
                     )
                     if config.use_wandb and wandb is not None:
                         current_epoch_progress = epoch + (step_in_epoch + 1) / steps_per_epoch
                         try:
-                            wandb.log({
+                            wandb_payload = {
                                 "train_loss": avg_loss, "train_l2_loss": avg_l2,
                                 "train_ce_loss": avg_ce, "lr": current_lr,
                                 "epoch": current_epoch_progress, "step": global_step,
-                            }, step=global_step)
+                            }
+                            wandb_payload.update({
+                                f"train_{key}": value for key, value in aux_log.items()
+                            })
+                            wandb.log(wandb_payload, step=global_step)
                         except Exception:
                             pass
                     with open(metrics_path, "a", encoding="utf-8") as metrics_file:
-                        metrics_file.write(json.dumps({
+                        metric_payload = {
                             "step": global_step,
                             "optimizer_step": global_step // grad_accum_steps,
                             "loss": avg_loss,
@@ -665,7 +729,9 @@ def run_training(config, *, force_cpu: bool = False):
                             "elapsed_training_seconds": elapsed_training_seconds,
                             "elapsed_run_seconds": time.perf_counter() - process_started_perf,
                             "timestamp_utc": _utc_now(),
-                        }) + "\n")
+                        }
+                        metric_payload.update(aux_log)
+                        metrics_file.write(json.dumps(metric_payload) + "\n")
 
                 train_metrics = []
                 last_log_step = global_step

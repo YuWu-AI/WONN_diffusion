@@ -44,6 +44,10 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--warmup-steps", type=int, default=50)
     parser.add_argument("--measure-steps", type=int, default=200)
+    parser.add_argument(
+        "--initial-step", type=int, default=0,
+        help="Initial train step, useful for profiling fully-warmed objectives.",
+    )
     parser.add_argument("--output", required=True)
     parser.add_argument("--config-override", action="append", default=[])
     return parser.parse_args()
@@ -64,6 +68,8 @@ def main() -> int:
         return 2
     if not 0.0 <= args.decoder_prob <= 1.0:
         raise ValueError("decoder-prob must be in [0, 1]")
+    if args.initial_step < 0:
+        raise ValueError("initial-step must be non-negative")
 
     config = load_config_from_yaml(args.config)
     config = apply_config_overrides(config, args.config_override)
@@ -119,6 +125,7 @@ def main() -> int:
         model=model,
         optimizer=optimizer,
         ema_params1=TrainState.init_ema(model),
+        step=args.initial_step,
         dropout_generator=generator,
     )
 
@@ -158,7 +165,7 @@ def main() -> int:
 
     averages = {
         key: float(torch.stack([item[key] for item in metrics]).mean().cpu())
-        for key in ("loss", "l2_loss", "ce_loss")
+        for key in metrics[0]
     }
     total_params = sum(parameter.numel() for parameter in model.parameters())
     trainable_params = sum(
@@ -168,6 +175,7 @@ def main() -> int:
         "model": args.model,
         "decoder_prob": args.decoder_prob,
         "seed": config.seed,
+        "initial_step": args.initial_step,
         "batch_size": args.batch_size,
         "sequence_length": config.max_length,
         "warmup_steps": args.warmup_steps,
