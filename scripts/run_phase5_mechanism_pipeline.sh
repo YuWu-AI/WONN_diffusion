@@ -249,12 +249,15 @@ done
 "$python_bin" scripts/summarize_phase5_mechanism.py \
     --root "$run_root" \
     --output-dir "$run_root/analysis"
+"$python_bin" scripts/render_phase5_mechanism_report.py \
+    --summary "$run_root/analysis/mechanism_summary.json" \
+    --output "$run_root/analysis/report.html"
 
 "$python_bin" -c '
 import json,sys
 from datetime import datetime,timezone
-json.dump({"status":"complete","completed_at":datetime.now(timezone.utc).isoformat(),"source_commit":sys.argv[2],"analysis":sys.argv[3]},open(sys.argv[1],"w"),indent=2)
-' "$run_root/pipeline_complete.json" "$source_commit" "$run_root/analysis/mechanism_summary.json"
+json.dump({"status":"complete","completed_at":datetime.now(timezone.utc).isoformat(),"source_commit":sys.argv[2],"analysis":sys.argv[3],"report":sys.argv[4]},open(sys.argv[1],"w"),indent=2)
+' "$run_root/pipeline_complete.json" "$source_commit" "$run_root/analysis/mechanism_summary.json" "$run_root/analysis/report.html"
 
 if command -v notify-send >/dev/null 2>&1; then
     notify-send "DLM-WONN Phase 5" "Mechanism sandbox pipeline completed"

@@ -10,6 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from summarize_phase5_mechanism import RUNS, summarize
+from render_phase5_mechanism_report import render_report
 
 
 def _write_json(path: Path, payload) -> None:
@@ -83,6 +84,14 @@ class Phase5MechanismSummaryTest(unittest.TestCase):
             self.assertEqual(len(result["tables"]["diagnostics"]), 108)
             self.assertTrue((output / "mechanism_summary.json").is_file())
             self.assertTrue((output / "evaluation.csv").is_file())
+            report = output / "report.html"
+            render_report(result, report)
+            html = report.read_text(encoding="utf-8")
+            self.assertIn("Phase 5 WONN 高噪语义机制实验", html)
+            self.assertIn("Metric 说明", html)
+            self.assertIn("S-Token-Contrast", html)
+            self.assertIn("source contrastive loss", html)
+            self.assertNotIn("https://", html)
 
 
 if __name__ == "__main__":
