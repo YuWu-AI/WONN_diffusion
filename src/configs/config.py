@@ -111,6 +111,7 @@ class Config:
     adam_b2: float = 0.95
     grad_accum_steps: int = 1  # Gradient accumulation steps (optimizer updates every K mini-batches)
     max_optimizer_steps: int = None  # Optional exact optimizer-step budget; None trains all epochs.
+    stop_optimizer_steps: int = None  # Optional staged stop; keeps the max-step LR schedule unchanged.
     use_bf16: bool = True  # Use CUDA BF16 autocast for training/eval forward passes.
     use_compile: bool = False  # Wrap the eval/sampling model in torch.compile.
     compile_train: bool = True  # Wrap the training model in torch.compile.

@@ -6,11 +6,11 @@ common_git_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-com
 main_checkout="$(dirname "$common_git_dir")"
 python_bin="${DLM_WONN_PYTHON:-$main_checkout/.venv/bin/python}"
 run_root="outputs/phase5/redesign_v2/formal50k"
+legacy_root="${DLM_WONN_LEGACY_ROOT:-outputs/phase5/formal50k}"
+legacy_elf_dir="$legacy_root/elf_b_seed42_b12"
 elf_config="src/configs/training_configs/train_de-en_ELF-B-phase5-50k.yml"
 wonn_config="src/configs/training_configs/train_de-en-WONN-L6T3-phase5-50k.yml"
-elf_dir="$run_root/elf_b_seed42_b12"
 wonn_dir="$run_root/wonn_l6t3_seed42_b12"
-gate_checkpoint_steps="5000,10000,15000,20000"
 evaluation_steps=(10000 20000 30000 40000 50000)
 
 cd "$repo_root"
@@ -32,6 +32,17 @@ if [ ! -f "$elf_config" ] || [ ! -f "$wonn_config" ]; then
     echo "missing formal 50K training configuration" >&2
     exit 5
 fi
+for required in \
+    "$legacy_root/experiment_manifest.json" \
+    "$legacy_root/pipeline_complete.json" \
+    "$legacy_elf_dir/training_complete.json" \
+    "$legacy_elf_dir/checkpoint_50000" \
+    "$legacy_elf_dir/evaluations/checkpoint_50000/evaluation_complete.json"; do
+    if [ ! -s "$required" ]; then
+        echo "missing validated legacy ELF artifact: $required" >&2
+        exit 14
+    fi
+done
 
 mkdir -p "$run_root"
 exec 9>"$run_root/pipeline.lock"
@@ -88,7 +99,6 @@ if [ ! -s "$manifest_path" ]; then
     "$python_bin" scripts/capture_phase5_manifest.py \
         --repo-root "$repo_root" \
         --output "$manifest_path" \
-        --config "$elf_config" \
         --config "$wonn_config"
 fi
 
@@ -112,10 +122,15 @@ run_training() {
     printf '%s\n' "$config_path" > "$output_dir/source_config"
     sha256sum "$config_path" > "$output_dir/source_config.sha256"
     command=("$python_bin" src/train.py --config "$config_path")
-    if [ "$target_step" -eq 20000 ]; then
+    if [ "$target_step" -eq 10000 ]; then
         command+=(
-            --config_override "max_optimizer_steps=20000"
-            --config_override "save_optimizer_steps=$gate_checkpoint_steps"
+            --config_override "stop_optimizer_steps=10000"
+            --config_override "save_optimizer_steps=5000,10000"
+        )
+    elif [ "$target_step" -eq 20000 ]; then
+        command+=(
+            --config_override "stop_optimizer_steps=20000"
+            --config_override "save_optimizer_steps=5000,10000,15000,20000"
         )
     fi
     echo "starting or resuming $label training to optimizer step $target_step"
@@ -183,44 +198,97 @@ evaluate_checkpoint() {
     mv "$temporary_dir" "$eval_dir"
 }
 
-gate_dir="$run_root/analysis/gate20k"
-gate_report="$gate_dir/comparison.json"
+run_conditioning_diagnostic() {
+    local step="$1"
+    local output_dir="$wonn_dir/diagnostics/checkpoint_$step"
+    local report="$output_dir/diagnostics.json"
+    local log_path="$wonn_dir/pipeline.log"
+    if [ -s "$report" ]; then
+        diagnostic_status="$($python_bin -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status"))' "$report")"
+        if [ "$diagnostic_status" = "complete" ]; then
+            echo "WONN-L6T3 checkpoint $step conditioning diagnostic already complete; skipping"
+            return
+        fi
+    fi
+    echo "running WONN-L6T3 checkpoint $step source-conditioning diagnostic"
+    "$python_bin" scripts/diagnose_phase5_checkpoint.py \
+        --root "$run_root" \
+        --output-dir "$output_dir" \
+        --num-samples 256 \
+        --batch-size 16 \
+        --seed 42 \
+        --model-spec "WONN-L6T3|$wonn_config|wonn_l6t3_seed42_b12/checkpoint_$step" \
+        --t-values 0.5 \
+        --rollout-starts 0.0 \
+        --overwrite >> "$log_path" 2>&1
+    if [ ! -s "$report" ]; then
+        echo "WONN-L6T3 checkpoint $step diagnostic did not produce $report" >&2
+        exit 15
+    fi
+}
+
+run_gate() {
+    local stage="$1"
+    local step="$2"
+    local gate_dir="$run_root/analysis/$stage"
+    local gate_report="$gate_dir/comparison.json"
+    local diagnostics="$wonn_dir/diagnostics/checkpoint_$step/diagnostics.json"
+    local gate_passed="false"
+    if [ -s "$gate_report" ]; then
+        gate_passed="$($python_bin -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["gate"]["passed"]).lower())' "$gate_report")"
+    fi
+    if [ "$gate_passed" != "true" ]; then
+        "$python_bin" scripts/evaluate_phase5_wonn_gate.py \
+            --root "$run_root" \
+            --output-dir "$gate_dir" \
+            --stage "$stage" \
+            --diagnostics "$diagnostics" \
+            --verify-checkpoints
+        gate_passed="$($python_bin -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["gate"]["passed"]).lower())' "$gate_report")"
+    else
+        echo "reusing passed $stage report at $gate_report"
+    fi
+    if [ "$gate_passed" != "true" ]; then
+        blocked_at="$(date --iso-8601=seconds)"
+        printf '{\n  "status": "blocked_by_%s",\n  "blocked_at": "%s",\n  "source_commit": "%s",\n  "gate_report": "%s"\n}\n' \
+            "$stage" "$blocked_at" "$source_commit" "$gate_report" \
+            > "$run_root/pipeline_gate_blocked.json"
+        echo "$stage did not pass; refusing further training" >&2
+        exit 20
+    fi
+    printf '{\n  "status": "passed",\n  "source_commit": "%s",\n  "gate_report": "%s"\n}\n' \
+        "$source_commit" "$gate_report" > "$run_root/pipeline_${stage}_passed.json"
+}
+
+pilot_report="$run_root/analysis/pilot10k/comparison.json"
+pilot_passed="false"
+if [ -s "$pilot_report" ]; then
+    pilot_passed="$($python_bin -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["gate"]["passed"]).lower())' "$pilot_report")"
+fi
+if [ "$pilot_passed" != "true" ]; then
+    run_training "WONN-L6T3" "$wonn_config" "$wonn_dir" 10000
+    for step in 5000 10000; do
+        evaluate_checkpoint "WONN-L6T3" "$wonn_config" "$wonn_dir" "$step" 1000
+    done
+    run_conditioning_diagnostic 10000
+fi
+run_gate "pilot10k" 10000
+
+gate_report="$run_root/analysis/gate20k/comparison.json"
 gate_passed="false"
 if [ -s "$gate_report" ]; then
     gate_passed="$($python_bin -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["gate"]["passed"]).lower())' "$gate_report")"
 fi
 if [ "$gate_passed" != "true" ]; then
-    run_training "ELF-B" "$elf_config" "$elf_dir" 20000
     run_training "WONN-L6T3" "$wonn_config" "$wonn_dir" 20000
 
     for step in 10000 20000; do
-        evaluate_checkpoint "ELF-B" "$elf_config" "$elf_dir" "$step" 1000
         evaluate_checkpoint "WONN-L6T3" "$wonn_config" "$wonn_dir" "$step" 1000
     done
-
-    "$python_bin" scripts/analyze_phase5_50k.py \
-        --root "$run_root" \
-        --output-dir "$gate_dir" \
-        --stage gate20k \
-        --verify-checkpoints \
-        --bootstrap-resamples 1000
-    gate_passed="$($python_bin -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["gate"]["passed"]).lower())' "$gate_report")"
-else
-    echo "reusing passed 20K gate report at $gate_report"
+    run_conditioning_diagnostic 20000
 fi
-if [ "$gate_passed" != "true" ]; then
-    blocked_at="$(date --iso-8601=seconds)"
-    printf '{\n  "status": "blocked_by_20k_gate",\n  "blocked_at": "%s",\n  "source_commit": "%s",\n  "gate_report": "%s"\n}\n' \
-        "$blocked_at" "$source_commit" "$gate_report" \
-        > "$run_root/pipeline_gate_blocked.json"
-    echo "20K gate did not pass; refusing to continue to 50K" >&2
-    exit 20
-fi
+run_gate "gate20k" 20000
 
-printf '{\n  "status": "passed",\n  "source_commit": "%s",\n  "gate_report": "%s"\n}\n' \
-    "$source_commit" "$gate_report" > "$run_root/pipeline_gate_passed.json"
-
-run_training "ELF-B" "$elf_config" "$elf_dir" 50000
 run_training "WONN-L6T3" "$wonn_config" "$wonn_dir" 50000
 
 for step in "${evaluation_steps[@]}"; do
@@ -228,13 +296,13 @@ for step in "${evaluation_steps[@]}"; do
     if [ "$step" -eq 50000 ]; then
         samples=3000
     fi
-    evaluate_checkpoint "ELF-B" "$elf_config" "$elf_dir" "$step" "$samples"
     evaluate_checkpoint "WONN-L6T3" "$wonn_config" "$wonn_dir" "$step" "$samples"
 done
 
 final_dir="$run_root/analysis/final50k"
 "$python_bin" scripts/analyze_phase5_50k.py \
     --root "$run_root" \
+    --elf-run-dir "$legacy_elf_dir" \
     --output-dir "$final_dir" \
     --stage final50k \
     --verify-checkpoints \
@@ -246,5 +314,5 @@ printf '{\n  "status": "complete",\n  "completed_at": "%s",\n  "source_commit": 
     > "$run_root/pipeline_complete.json"
 
 if command -v notify-send >/dev/null 2>&1; then
-    notify-send "DLM-WONN Phase 5" "WMT14 ELF-B vs WONN-L6T3 50K pipeline completed"
+    notify-send "DLM-WONN Phase 5" "WMT14 redesigned WONN 50K vs legacy ELF completed"
 fi

@@ -339,36 +339,32 @@ def _paired_bootstrap(elf_eval: dict, wonn_eval: dict, resamples: int, seed: int
 
 
 def _evaluate_gate(runs: dict) -> dict:
-    final_metrics = {
-        label: run["evaluations"][20000]["metrics"]
-        for label, run in runs.items()
-    }
-    improving_models = []
-    for label, run in runs.items():
-        at_10k = run["evaluations"][10000]["metrics"]
-        at_20k = run["evaluations"][20000]["metrics"]
-        if at_20k["bleu"] > at_10k["bleu"] and at_20k["chrf2"] > at_10k["chrf2"]:
-            improving_models.append(label)
+    wonn = runs["WONN-L6T3"]
+    at_10k = wonn["evaluations"][10000]["metrics"]
+    at_20k = wonn["evaluations"][20000]["metrics"]
     checks = {
-        "all_20k_empty_rates_at_most_10_pct": all(
-            metrics["empty_rate_pct"] <= 10.0
-            for metrics in final_metrics.values()
+        "wonn_20k_empty_rate_at_most_10_pct": at_20k["empty_rate_pct"] <= 10.0,
+        "wonn_20k_unique_rate_at_least_90_pct": at_20k["unique_rate_pct"] >= 90.0,
+        "wonn_20k_length_ratio_between_0_5_and_1_5": (
+            0.5 <= at_20k["length_ratio"] <= 1.5
         ),
-        "at_least_one_20k_bleu_at_least_1": any(
-            metrics["bleu"] >= 1.0 for metrics in final_metrics.values()
+        "wonn_20k_bleu_at_least_1": at_20k["bleu"] >= 1.0,
+        "wonn_20k_chrf2_exceeds_legacy_wonn": (
+            at_20k["chrf2"] > 14.723611391748296
         ),
-        "at_least_one_model_improves_bleu_and_chrf2_from_10k": bool(
-            improving_models
-        ),
+        "wonn_improves_bleu_from_10k": at_20k["bleu"] > at_10k["bleu"],
+        "wonn_improves_chrf2_from_10k": at_20k["chrf2"] > at_10k["chrf2"],
     }
     return {
         "passed": all(checks.values()),
         "checks": checks,
-        "improving_models": improving_models,
         "thresholds": {
-            "maximum_empty_rate_pct_per_model": 10.0,
-            "minimum_bleu_for_at_least_one_model": 1.0,
-            "trend": "at least one model improves both BLEU and chrF++ from 10K to 20K",
+            "maximum_wonn_empty_rate_pct": 10.0,
+            "minimum_wonn_unique_rate_pct": 90.0,
+            "wonn_length_ratio_range": [0.5, 1.5],
+            "minimum_wonn_bleu": 1.0,
+            "minimum_wonn_chrf2_exclusive": 14.723611391748296,
+            "trend": "WONN improves both BLEU and chrF++ from 10K to 20K",
         },
     }
 
@@ -376,6 +372,7 @@ def _evaluate_gate(runs: dict) -> dict:
 def analyze(
     root: Path, output_dir: Path, stage_name: str,
     verify_checkpoints: bool, bootstrap_resamples: int,
+    elf_run_dir: Path | None = None,
 ) -> dict:
     if stage_name not in STAGES:
         raise ValueError(f"unknown stage {stage_name!r}")
@@ -387,9 +384,16 @@ def analyze(
     if manifest.get("status") != "ready":
         raise ValueError(f"{manifest_path} is not ready")
 
+    run_directories = {
+        label: (
+            elf_run_dir if label == "ELF-B" and elf_run_dir is not None
+            else root / spec["directory"]
+        )
+        for label, spec in MODEL_SPECS.items()
+    }
     runs = {
         label: _load_run(
-            root / spec["directory"], label, spec, stage, verify_checkpoints,
+            run_directories[label], label, spec, stage, verify_checkpoints,
         )
         for label, spec in MODEL_SPECS.items()
     }
@@ -431,6 +435,15 @@ def analyze(
             "secondary_metrics": [
                 "chrF++", "TER", "empty rate", "length ratio",
             ],
+            "reused_legacy_elf_baseline": elf_run_dir is not None,
+            "run_directories": {
+                label: str(path.resolve())
+                for label, path in run_directories.items()
+            },
+            "run_source_commits": {
+                label: (path / "source_commit").read_text(encoding="utf-8").strip()
+                for label, path in run_directories.items()
+            },
         },
         "training": {
             label: run["training_summary"] for label, run in runs.items()
@@ -500,6 +513,10 @@ def main():
         default=Path("outputs/phase5/redesign_v2/formal50k"),
     )
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--elf-run-dir", type=Path,
+        help="Reuse an already validated ELF run instead of reading it below --root.",
+    )
     parser.add_argument("--stage", choices=tuple(STAGES), required=True)
     parser.add_argument("--verify-checkpoints", action="store_true")
     parser.add_argument("--bootstrap-resamples", type=int, default=1000)
@@ -508,7 +525,7 @@ def main():
         raise ValueError("bootstrap-resamples must be positive")
     result = analyze(
         args.root, args.output_dir, args.stage,
-        args.verify_checkpoints, args.bootstrap_resamples,
+        args.verify_checkpoints, args.bootstrap_resamples, args.elf_run_dir,
     )
     print(json.dumps({
         "status": result["status"],

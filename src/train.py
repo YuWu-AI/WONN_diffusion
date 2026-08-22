@@ -93,8 +93,9 @@ def _resolve_step_schedule(
     grad_accum_steps: int,
     max_optimizer_steps,
     save_optimizer_steps,
+    stop_optimizer_steps=None,
 ):
-    """Resolve an exact optimizer-step budget and requested save points."""
+    """Resolve the LR-schedule budget, staged stop, and requested save points."""
     if grad_accum_steps <= 0:
         raise ValueError("grad_accum_steps must be positive")
     num_optimizer_steps = num_train_steps // grad_accum_steps
@@ -102,6 +103,14 @@ def _resolve_step_schedule(
         if max_optimizer_steps <= 0:
             raise ValueError("max_optimizer_steps must be positive when provided")
         num_optimizer_steps = min(num_optimizer_steps, max_optimizer_steps)
+    target_optimizer_steps = num_optimizer_steps
+    if stop_optimizer_steps is not None:
+        if stop_optimizer_steps <= 0 or stop_optimizer_steps > num_optimizer_steps:
+            raise ValueError(
+                "stop_optimizer_steps must be positive and no larger than "
+                "the optimizer schedule budget"
+            )
+        target_optimizer_steps = stop_optimizer_steps
 
     requested_steps = set()
     if save_optimizer_steps:
@@ -114,7 +123,11 @@ def _resolve_step_schedule(
             raise ValueError(
                 "save_optimizer_steps must be positive and no larger than the training budget"
             )
-    return num_optimizer_steps, num_optimizer_steps * grad_accum_steps, requested_steps
+    return (
+        num_optimizer_steps,
+        target_optimizer_steps * grad_accum_steps,
+        requested_steps,
+    )
 
 
 def _resume_position(resume_step: int, steps_per_epoch: int):
@@ -371,6 +384,7 @@ def run_training(config, *, force_cpu: bool = False):
         grad_accum_steps=grad_accum_steps,
         max_optimizer_steps=config.max_optimizer_steps,
         save_optimizer_steps=config.save_optimizer_steps,
+        stop_optimizer_steps=config.stop_optimizer_steps,
     )
 
     # Effective learning rate (scaled with effective batch size, including grad accum)
@@ -528,7 +542,8 @@ def run_training(config, *, force_cpu: bool = False):
                 "started_at_utc": training_started_at,
                 "resume_train_step": resume_step,
                 "target_train_step": target_train_steps,
-                "target_optimizer_step": num_optimizer_steps,
+                "target_optimizer_step": target_train_steps // grad_accum_steps,
+                "optimizer_schedule_steps": num_optimizer_steps,
                 "batch_size_per_device": local_batch_size,
                 "world_size": world,
                 "grad_accum_steps": grad_accum_steps,

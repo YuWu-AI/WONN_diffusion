@@ -19,7 +19,7 @@ fi
 command=(
     systemd-run --user
     "--unit=$unit_name"
-    "--description=DLM-WONN WMT14 ELF-B vs WONN-L6T3 gated 50K experiment"
+    "--description=DLM-WONN WMT14 WONN pilot and gated 50K vs legacy ELF"
     "--property=MemoryHigh=$memory_high"
     "--property=MemoryMax=$memory_max"
     "--property=CPUWeight=50"

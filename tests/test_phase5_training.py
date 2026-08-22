@@ -46,6 +46,22 @@ class Phase5ScheduleTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no larger than the training budget"):
             _resolve_step_schedule(1000, 4, 100, "101")
 
+    def test_staged_stop_preserves_optimizer_schedule_budget(self):
+        optimizer_steps, train_steps, save_steps = _resolve_step_schedule(
+            num_train_steps=1000,
+            grad_accum_steps=4,
+            max_optimizer_steps=100,
+            save_optimizer_steps="20,50",
+            stop_optimizer_steps=50,
+        )
+        self.assertEqual(optimizer_steps, 100)
+        self.assertEqual(train_steps, 200)
+        self.assertEqual(save_steps, {20, 50})
+
+    def test_staged_stop_cannot_exceed_optimizer_schedule_budget(self):
+        with self.assertRaisesRegex(ValueError, "optimizer schedule budget"):
+            _resolve_step_schedule(1000, 4, 100, "", stop_optimizer_steps=101)
+
     def test_resume_position_uses_checkpoint_step(self):
         self.assertEqual(_resume_position(250, 100), (2, 50))
 

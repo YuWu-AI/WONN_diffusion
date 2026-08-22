@@ -12,6 +12,10 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import analyze_phase5_50k
 from analyze_phase5_50k import _evaluate_gate, _metric_bundle, _paired_bootstrap
+from evaluate_phase5_wonn_gate import (
+    STAGES as WONN_GATE_STAGES,
+    _evaluate_gate as _evaluate_wonn_gate,
+)
 from configs.config import load_config_from_yaml
 
 
@@ -105,27 +109,61 @@ class Phase550KAnalysisTest(unittest.TestCase):
             _paired_bootstrap(elf, wonn, resamples=2, seed=1)
 
     def test_20k_gate_requires_quality_noncollapse_and_learning_trend(self):
-        def run(bleu_10k, bleu_20k, chrf_10k, chrf_20k, empty_20k):
+        def run(
+            bleu_10k, bleu_20k, chrf_10k, chrf_20k, empty_20k,
+            unique_20k=99.0, length_ratio_20k=1.0,
+        ):
             return {"evaluations": {
                 10000: {"metrics": {"bleu": bleu_10k, "chrf2": chrf_10k}},
                 20000: {"metrics": {
                     "bleu": bleu_20k,
                     "chrf2": chrf_20k,
                     "empty_rate_pct": empty_20k,
+                    "unique_rate_pct": unique_20k,
+                    "length_ratio": length_ratio_20k,
                 }},
             }}
 
         passing = _evaluate_gate({
-            "ELF-B": run(0.1, 1.2, 4.0, 8.0, 2.0),
-            "WONN-L6T3": run(0.2, 0.8, 5.0, 7.0, 3.0),
+            "ELF-B": run(0.1, 2.0, 4.0, 20.0, 2.0),
+            "WONN-L6T3": run(0.2, 1.2, 13.0, 16.0, 3.0),
         })
         self.assertTrue(passing["passed"])
 
         failing = _evaluate_gate({
-            "ELF-B": run(0.1, 0.2, 4.0, 5.0, 2.0),
-            "WONN-L6T3": run(0.2, 0.3, 5.0, 6.0, 11.0),
+            "ELF-B": run(0.1, 8.0, 4.0, 35.0, 0.0),
+            "WONN-L6T3": run(0.2, 0.3, 13.0, 14.0, 11.0),
         })
         self.assertFalse(failing["passed"])
+
+    def test_pilot_gate_requires_wonn_source_sensitivity(self):
+        run = {"evaluations": {
+            5000: {"metrics": {"bleu": 0.02, "chrf2": 10.0}},
+            10000: {"metrics": {
+                "bleu": 0.2,
+                "chrf2": 15.0,
+                "empty_rate_pct": 0.0,
+                "unique_rate_pct": 99.0,
+                "length_ratio": 1.0,
+            }},
+        }}
+        diagnostics = {
+            "status": "complete", "num_samples": 256, "seed": 42,
+            "models": {"WONN-L6T3": {"conditioning": {
+            "correct": {"chrf2": 15.0},
+            "shuffled": {"chrf2": 14.0},
+            "zero": {"chrf2": 13.0},
+            "shuffle_construction": {"fixed_target_offsets": True},
+        }}},
+        }
+        self.assertTrue(_evaluate_wonn_gate(
+            run, diagnostics, WONN_GATE_STAGES["pilot10k"],
+        )["passed"])
+
+        diagnostics["models"]["WONN-L6T3"]["conditioning"]["shuffled"]["chrf2"] = 14.9
+        self.assertFalse(_evaluate_wonn_gate(
+            run, diagnostics, WONN_GATE_STAGES["pilot10k"],
+        )["passed"])
 
     def test_end_to_end_analysis_writes_comparison_artifacts(self):
         references = ["a translated sentence", "another translated sentence", "final text"]
@@ -161,6 +199,9 @@ class Phase550KAnalysisTest(unittest.TestCase):
                 run_dir = root / spec["directory"]
                 eval_dir = run_dir / "evaluations/checkpoint_50000/ode-test-cond"
                 eval_dir.mkdir(parents=True)
+                (run_dir / "source_commit").write_text(
+                    "abc123\n", encoding="utf-8",
+                )
                 (run_dir / "checkpoint_50000").write_bytes(b"checkpoint")
                 resolved_config = {
                     "model": spec["config_model"],
@@ -243,12 +284,15 @@ class Phase550KAnalysisTest(unittest.TestCase):
         pipeline = (
             REPO_ROOT / "scripts/run_phase5_50k_pipeline.sh"
         ).read_text(encoding="utf-8")
-        gate_position = pipeline.index("--stage gate20k")
+        pilot_position = pipeline.index('run_gate "pilot10k" 10000')
+        gate_position = pipeline.index('run_gate "gate20k" 20000')
         continuation_position = pipeline.index(
-            'run_training "ELF-B" "$elf_config" "$elf_dir" 50000'
+            'run_training "WONN-L6T3" "$wonn_config" "$wonn_dir" 50000'
         )
+        self.assertLess(pilot_position, gate_position)
         self.assertLess(gate_position, continuation_position)
-        self.assertIn('if [ "$gate_passed" != "true" ]', pipeline)
+        self.assertNotIn('run_training "ELF-B"', pipeline)
+        self.assertIn('--elf-run-dir "$legacy_elf_dir"', pipeline)
         self.assertIn("exit 20", pipeline)
 
 
