@@ -494,6 +494,39 @@ def analyze(
             f"| {row['ter']:.4f} | {row['empty_rate_pct']:.2f} "
             f"| {row['length_ratio']:.4f} | {row['num_samples']} |\n"
         )
+    if stage_name == "final50k":
+        elf = terminal_rows["ELF-B"]
+        wonn = terminal_rows["WONN-L6T3"]
+        bleu_bootstrap = bootstrap["bleu_delta_wonn_minus_elf"]
+        chrf_bootstrap = bootstrap["chrf2_delta_wonn_minus_elf"]
+        elf_training = runs["ELF-B"]["training_summary"]
+        wonn_training = runs["WONN-L6T3"]["training_summary"]
+        markdown.extend([
+            "\n## Executive result\n",
+            f"- WONN minus Transformer ELF BLEU: **{wonn['bleu'] - elf['bleu']:+.4f}** "
+            f"(paired bootstrap 95% CI {bleu_bootstrap['ci95_low']:+.4f} to "
+            f"{bleu_bootstrap['ci95_high']:+.4f}).\n",
+            f"- WONN minus Transformer ELF chrF++: **{wonn['chrf2'] - elf['chrf2']:+.4f}** "
+            f"(paired bootstrap 95% CI {chrf_bootstrap['ci95_low']:+.4f} to "
+            f"{chrf_bootstrap['ci95_high']:+.4f}).\n",
+            f"- Parameters: WONN {wonn_training['parameters']:,} vs ELF "
+            f"{elf_training['parameters']:,}; peak allocated CUDA memory: "
+            f"{wonn_training['peak_allocated_cuda_mib']:.1f} MiB vs "
+            f"{elf_training['peak_allocated_cuda_mib']:.1f} MiB.\n",
+            "\n## Learning curve\n",
+            "| Step | ELF BLEU | WONN BLEU | ELF chrF++ | WONN chrF++ |\n",
+            "|---:|---:|---:|---:|---:|\n",
+        ])
+        by_model_step = {
+            (row["model"], row["step"]): row for row in evaluation_rows
+        }
+        for step in stage["evaluation_steps"]:
+            elf_step = by_model_step[("ELF-B", step)]
+            wonn_step = by_model_step[("WONN-L6T3", step)]
+            markdown.append(
+                f"| {step} | {elf_step['bleu']:.4f} | {wonn_step['bleu']:.4f} "
+                f"| {elf_step['chrf2']:.4f} | {wonn_step['chrf2']:.4f} |\n"
+            )
     if stage_name == "gate20k":
         gate = payload["gate"]
         markdown.extend([

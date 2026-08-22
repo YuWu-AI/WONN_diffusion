@@ -279,8 +279,11 @@ class Phase550KAnalysisTest(unittest.TestCase):
             self.assertTrue((output / "comparison.md").is_file())
             self.assertTrue((output / "training_summary.csv").is_file())
             self.assertTrue((output / "evaluation_summary.csv").is_file())
+            report = (output / "comparison.md").read_text(encoding="utf-8")
+            self.assertIn("## Executive result", report)
+            self.assertIn("## Learning curve", report)
 
-    def test_pipeline_is_gated_before_50k_continuation(self):
+    def test_pipeline_records_intermediate_gates_without_blocking_50k(self):
         pipeline = (
             REPO_ROOT / "scripts/run_phase5_50k_pipeline.sh"
         ).read_text(encoding="utf-8")
@@ -293,7 +296,8 @@ class Phase550KAnalysisTest(unittest.TestCase):
         self.assertLess(gate_position, continuation_position)
         self.assertNotIn('run_training "ELF-B"', pipeline)
         self.assertIn('--elf-run-dir "$legacy_elf_dir"', pipeline)
-        self.assertIn("exit 20", pipeline)
+        self.assertIn("observed_failed_continuing", pipeline)
+        self.assertNotIn("exit 20", pipeline)
 
 
 if __name__ == "__main__":

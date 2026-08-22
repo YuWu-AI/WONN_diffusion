@@ -81,16 +81,23 @@ if [ ! -f "$python_include/Python.h" ]; then
 fi
 export CPATH="$python_include${CPATH:+:$CPATH}"
 
-source_commit="$(git rev-parse HEAD)"
+orchestrator_commit="$(git rev-parse HEAD)"
+source_commit="$orchestrator_commit"
 started_at="$(date --iso-8601=seconds)"
 if [ ! -e "$run_root/pipeline_started.json" ]; then
     printf '{\n  "status": "running",\n  "started_at": "%s",\n  "source_commit": "%s"\n}\n' \
         "$started_at" "$source_commit" > "$run_root/pipeline_started.json"
 else
     recorded_commit="$($python_bin -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_commit"])' "$run_root/pipeline_started.json")"
-    if [ "$recorded_commit" != "$source_commit" ]; then
-        echo "existing run was started from $recorded_commit, current commit is $source_commit" >&2
-        exit 7
+    if [ "$recorded_commit" != "$orchestrator_commit" ]; then
+        if ! git diff --quiet "$recorded_commit" "$orchestrator_commit" -- src; then
+            echo "refusing to resume after model or training code changed since $recorded_commit" >&2
+            exit 7
+        fi
+        source_commit="$recorded_commit"
+        printf '{\n  "status": "resuming_to_50000",\n  "resumed_at": "%s",\n  "training_source_commit": "%s",\n  "orchestrator_commit": "%s",\n  "intermediate_gates": "advisory"\n}\n' \
+            "$started_at" "$source_commit" "$orchestrator_commit" \
+            > "$run_root/pipeline_resumed_to_50000.json"
     fi
 fi
 
@@ -249,12 +256,12 @@ run_gate() {
         echo "reusing passed $stage report at $gate_report"
     fi
     if [ "$gate_passed" != "true" ]; then
-        blocked_at="$(date --iso-8601=seconds)"
-        printf '{\n  "status": "blocked_by_%s",\n  "blocked_at": "%s",\n  "source_commit": "%s",\n  "gate_report": "%s"\n}\n' \
-            "$stage" "$blocked_at" "$source_commit" "$gate_report" \
-            > "$run_root/pipeline_gate_blocked.json"
-        echo "$stage did not pass; refusing further training" >&2
-        exit 20
+        observed_at="$(date --iso-8601=seconds)"
+        printf '{\n  "status": "observed_failed_continuing",\n  "observed_at": "%s",\n  "source_commit": "%s",\n  "gate_report": "%s"\n}\n' \
+            "$observed_at" "$source_commit" "$gate_report" \
+            > "$run_root/pipeline_${stage}_observed.json"
+        echo "$stage did not pass; recording the observation and continuing to 50K" >&2
+        return
     fi
     printf '{\n  "status": "passed",\n  "source_commit": "%s",\n  "gate_report": "%s"\n}\n' \
         "$source_commit" "$gate_report" > "$run_root/pipeline_${stage}_passed.json"
@@ -309,8 +316,8 @@ final_dir="$run_root/analysis/final50k"
     --bootstrap-resamples 1000
 
 completed_at="$(date --iso-8601=seconds)"
-printf '{\n  "status": "complete",\n  "completed_at": "%s",\n  "source_commit": "%s",\n  "analysis": "%s"\n}\n' \
-    "$completed_at" "$source_commit" "$final_dir/comparison.json" \
+printf '{\n  "status": "complete",\n  "completed_at": "%s",\n  "source_commit": "%s",\n  "orchestrator_commit": "%s",\n  "analysis": "%s"\n}\n' \
+    "$completed_at" "$source_commit" "$orchestrator_commit" "$final_dir/comparison.json" \
     > "$run_root/pipeline_complete.json"
 
 if command -v notify-send >/dev/null 2>&1; then

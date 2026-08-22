@@ -19,7 +19,7 @@ fi
 command=(
     systemd-run --user
     "--unit=$unit_name"
-    "--description=DLM-WONN WMT14 WONN pilot and gated 50K vs legacy ELF"
+    "--description=DLM-WONN WMT14 redesigned WONN 50K vs Transformer ELF"
     "--property=MemoryHigh=$memory_high"
     "--property=MemoryMax=$memory_max"
     "--property=CPUWeight=50"
@@ -43,6 +43,7 @@ case "$1" in
             echo "$unit_name.service is already active" >&2
             exit 3
         fi
+        systemctl --user reset-failed "$unit_name.service" 2>/dev/null || true
         "${command[@]}"
         echo "started $unit_name.service"
         echo "status: systemctl --user status $unit_name.service"
