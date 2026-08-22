@@ -92,11 +92,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--summary", type=Path,
-        default=Path("outputs/phase5/mechanism50k/analysis/mechanism_summary.json"),
+        default=Path(
+            "outputs/phase5/redesign_v2/mechanism50k/analysis/mechanism_summary.json"
+        ),
     )
     parser.add_argument(
         "--output", type=Path,
-        default=Path("outputs/phase5/mechanism50k/analysis/report.html"),
+        default=Path("outputs/phase5/redesign_v2/mechanism50k/analysis/report.html"),
     )
     args = parser.parse_args()
     summary = json.loads(args.summary.read_text(encoding="utf-8"))

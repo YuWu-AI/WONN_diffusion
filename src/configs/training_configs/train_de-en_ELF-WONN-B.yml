@@ -20,10 +20,8 @@ wonn_num_oscillators: 384
 wonn_num_layers: 6
 wonn_num_inner_steps: 2
 wonn_num_heads: 12
-wonn_qk_head_dim: 64
 wonn_step_init: 0.1
 wonn_step_max: 0.25
-wonn_coupling_mode: learned
 
 # Denoiser objective
 denoiser_p_mean: -1.5
@@ -65,7 +63,7 @@ save_freq: 10
 eval_freq: 10
 
 # Output
-output_dir: "outputs/elf_wonn_b-wmt-de-en"
+output_dir: "outputs/elf_wonn_b-redesign-v2-wmt-de-en"
 hf_repo_id: null
 resume: null
 

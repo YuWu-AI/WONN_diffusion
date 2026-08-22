@@ -137,6 +137,17 @@ def _validate_checkpoint(ckpt: Any):
         raise ValueError(f"checkpoint restore missing keys: {missing_keys}")
 
 
+def _load_model_state_strict(model, saved_state, checkpoint_kind: str) -> None:
+    """Reject architecture drift instead of partially loading model weights."""
+    try:
+        model.load_state_dict(saved_state, strict=True)
+    except RuntimeError as error:
+        raise ValueError(
+            f"{checkpoint_kind} is incompatible with the current model architecture; "
+            "old WONN checkpoints are not migrated or partially loaded"
+        ) from error
+
+
 def load_checkpoint(checkpoint_path: str, state) -> Tuple[Any, int]:
     """Load an ELF checkpoint.
 
@@ -176,7 +187,7 @@ def load_checkpoint(checkpoint_path: str, state) -> Tuple[Any, int]:
     log_for_0(f"Loaded checkpoint keys: {list(ckpt.keys())}")
 
     inner_model = unwrap_model(state.model)
-    inner_model.load_state_dict(ckpt["params"])
+    _load_model_state_strict(inner_model, ckpt["params"], "checkpoint")
     ema_src = ckpt.get("ema_params1", ckpt["params"])
     device_map = {n: p.device for n, p in inner_model.named_parameters()}
     for n, b in inner_model.named_buffers():
@@ -240,8 +251,10 @@ def load_warmstart_checkpoint(checkpoint_path: str, state) -> Tuple[Any, dict]:
         )
 
     unexpected_keys = sorted(set(saved_state) - set(current_state))
-    inner_model.load_state_dict(
-        {name: saved_state[name] for name in current_state}, strict=True
+    _load_model_state_strict(
+        inner_model,
+        {name: saved_state[name] for name in current_state},
+        "warm-start checkpoint",
     )
 
     ema_src = ckpt.get("ema_params1", saved_state)

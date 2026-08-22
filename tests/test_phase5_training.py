@@ -264,6 +264,37 @@ class Phase5CheckpointTest(unittest.TestCase):
             self.assertEqual(restored_step, 25)
             self.assertEqual(restored_state.epoch, 0.25)
 
+    def test_architecture_mismatch_fails_without_partial_checkpoint_loading(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            model = torch.nn.Linear(2, 2)
+            state = TrainState(
+                model=model,
+                optimizer=torch.optim.AdamW(model.parameters(), lr=1e-3),
+                ema_params1=TrainState.init_ema(model),
+                step=10,
+                epoch=0.1,
+            )
+            save_checkpoint(state, tmpdir, step=10)
+            checkpoint_path = Path(tmpdir) / "checkpoint_10"
+            checkpoint = torch.load(
+                checkpoint_path, map_location="cpu", weights_only=False
+            )
+            checkpoint["params"]["layers.0.coupling.q_proj.weight"] = (
+                checkpoint["params"].pop("weight")
+            )
+            torch.save(checkpoint, checkpoint_path)
+
+            restored_model = torch.nn.Linear(2, 2)
+            restored_state = TrainState(
+                model=restored_model,
+                optimizer=torch.optim.AdamW(restored_model.parameters(), lr=1e-3),
+                ema_params1=TrainState.init_ema(restored_model),
+            )
+            with self.assertRaisesRegex(
+                ValueError, "incompatible.*old WONN checkpoints.*not.*partially loaded"
+            ):
+                load_checkpoint(str(checkpoint_path), restored_state)
+
 
 class Phase5RunSummaryTest(unittest.TestCase):
     def test_summary_requires_complete_artifacts_and_writes_curves(self):

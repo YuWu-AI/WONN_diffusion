@@ -53,6 +53,8 @@ class Phase550KConfigTest(unittest.TestCase):
         self.assertIsNone(wonn.resume)
         self.assertIsNone(elf.init_from)
         self.assertIsNone(wonn.init_from)
+        self.assertIn("redesign_v2/formal50k", elf.output_dir)
+        self.assertIn("redesign_v2/formal50k", wonn.output_dir)
         self.assertTrue(elf.data_revision)
         self.assertTrue(elf.eval_data_revision)
         self.assertTrue(elf.encoder_revision)

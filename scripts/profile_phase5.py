@@ -89,10 +89,13 @@ def main() -> int:
     torch.backends.cudnn.allow_tf32 = True
 
     tokenizer = AutoTokenizer.from_pretrained(
-        config.tokenizer_name or config.encoder_model_name
+        config.tokenizer_name or config.encoder_model_name,
+        revision=config.tokenizer_revision,
     )
     pad_token_id = get_pad_token_id(tokenizer, config.pad_token)
-    dataset = load_dataset_split(config.eval_data_path)
+    dataset = load_dataset_split(
+        config.eval_data_path, revision=config.eval_data_revision
+    )
     dataloader = get_dataloader(
         dataset,
         batch_size=args.batch_size,
@@ -106,7 +109,11 @@ def main() -> int:
         seed=config.seed,
     )
 
-    encoder_config, encoder = get_encoder(config.encoder_model_name, torch.float32)
+    encoder_config, encoder = get_encoder(
+        config.encoder_model_name,
+        torch.float32,
+        revision=config.encoder_revision,
+    )
     encoder = encoder.to(device).eval()
     for parameter in encoder.parameters():
         parameter.requires_grad_(False)

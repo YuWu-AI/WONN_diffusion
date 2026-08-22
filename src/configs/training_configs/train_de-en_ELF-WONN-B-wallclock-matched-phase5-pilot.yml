@@ -18,10 +18,8 @@ wonn_num_oscillators: 384
 wonn_num_layers: 6
 wonn_num_inner_steps: 8
 wonn_num_heads: 12
-wonn_qk_head_dim: 64
 wonn_step_init: 0.1
 wonn_step_max: 0.25
-wonn_coupling_mode: learned
 
 denoiser_p_mean: -1.5
 denoiser_p_std: 0.8
@@ -57,7 +55,7 @@ save_optimizer_steps: "2000,5000,10000"
 save_freq: 100
 eval_freq: 100
 
-output_dir: "outputs/phase5/pilot/wonn_l6t8"
+output_dir: "outputs/phase5/redesign_v2/pilot/wonn_l6t8"
 hf_repo_id: null
 resume: null
 use_wandb: false

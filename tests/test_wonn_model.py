@@ -29,9 +29,10 @@ class WONNModelTest(unittest.TestCase):
         self.assertEqual(output.shape, (2, 6, 16))
         self.assertEqual(logits.shape, (2, 6, 23))
         self.assertGreater(diagnostics["layer_0/phase_update_rms"].item(), 0)
-        self.assertEqual(
-            diagnostics["layer_0/frequency_update_rms"].item(), 0
+        self.assertGreaterEqual(
+            diagnostics["transition_0/omega_update_rms"].item(), 0
         )
+        self.assertAlmostEqual(diagnostics["transition_0/alpha"].item(), 0.1)
         self.assertGreaterEqual(diagnostics["kuramoto_order"].item(), 0)
         self.assertLessEqual(diagnostics["kuramoto_order"].item(), 1)
         self.assertTrue(all(torch.isfinite(value) for value in diagnostics.values()))
@@ -52,26 +53,27 @@ class WONNModelTest(unittest.TestCase):
                 first_diagnostics[key], second_diagnostics[key], rtol=0, atol=0
             )
 
-    def test_frequency_transition_exists_only_between_layers(self):
+    def test_omega_transitions_exist_only_between_layers(self):
         model = make_tiny_wonn(depth=3)
+        self.assertEqual(len(model.layers), 3)
+        self.assertEqual(len(model.omega_transitions), 2)
+        first_parameters = set(id(p) for p in model.omega_transitions[0].parameters())
+        second_parameters = set(id(p) for p in model.omega_transitions[1].parameters())
+        self.assertTrue(first_parameters.isdisjoint(second_parameters))
+        self.assertFalse(
+            any(name.startswith("layers.2.omega_") for name, _ in model.named_parameters())
+        )
 
-        for layer in model.layers[:-1]:
-            self.assertTrue(layer.update_frequency)
-            self.assertIsNotNone(layer.frequency_norm)
-            self.assertIsNotNone(layer.frequency_transition)
-            self.assertIsNotNone(layer.frequency_gate)
-
-        final_layer = model.layers[-1]
-        self.assertFalse(final_layer.update_frequency)
-        self.assertIsNone(final_layer.frequency_norm)
-        self.assertIsNone(final_layer.frequency_transition)
-        self.assertIsNone(final_layer.frequency_gate)
-
-        final_prefix = f"layers.{len(model.layers) - 1}.frequency_"
-        final_frequency_parameters = [
-            name for name, _ in model.named_parameters() if name.startswith(final_prefix)
+    def test_six_layer_model_has_exactly_five_independent_transitions(self):
+        model = make_tiny_wonn(depth=6)
+        self.assertEqual(len(model.omega_transitions), 5)
+        parameter_ids = [
+            {id(parameter) for parameter in transition.parameters()}
+            for transition in model.omega_transitions
         ]
-        self.assertEqual(final_frequency_parameters, [])
+        for index, ids in enumerate(parameter_ids):
+            for other_ids in parameter_ids[index + 1:]:
+                self.assertTrue(ids.isdisjoint(other_ids))
 
 
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required for the formal WONN contract")
@@ -92,7 +94,8 @@ class WONNFormalCudaTest(unittest.TestCase):
             max_length=128,
             vocab_size=32100,
         ).to(device).train()
-        self.assertEqual(sum(p.numel() for p in model.parameters()), 30_028_271)
+        self.assertEqual(model.head_dim, 32)
+        self.assertEqual(sum(p.numel() for p in model.parameters()), 26_252_399)
 
         x = torch.randn(1, 128, 1024, device=device, requires_grad=True)
         t = torch.tensor([0.5], device=device)

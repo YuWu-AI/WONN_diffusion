@@ -144,11 +144,12 @@ def summarize(root: Path, output_dir: Path) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--root", type=Path, default=Path("outputs/phase5/mechanism50k")
+        "--root", type=Path,
+        default=Path("outputs/phase5/redesign_v2/mechanism50k")
     )
     parser.add_argument(
         "--output-dir", type=Path,
-        default=Path("outputs/phase5/mechanism50k/analysis"),
+        default=Path("outputs/phase5/redesign_v2/mechanism50k/analysis"),
     )
     args = parser.parse_args()
     result = summarize(args.root, args.output_dir)

@@ -63,10 +63,8 @@ class Config:
     wonn_num_layers: int = 6
     wonn_num_inner_steps: int = 2
     wonn_num_heads: int = 12
-    wonn_qk_head_dim: int = 64
     wonn_step_init: float = 0.1
     wonn_step_max: float = 0.25
-    wonn_coupling_mode: str = "learned"
 
     # Denoiser objective
     denoiser_p_mean: float = 0.8

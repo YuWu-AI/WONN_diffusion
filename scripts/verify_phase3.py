@@ -34,7 +34,8 @@ def main() -> int:
         "tests.test_model_contract.WONNModelContractTest.",
         "tests.test_model_contract.WONNCudaContractTest.",
         "tests.test_sampling_contract.WONNSamplingContractTest.",
-        "tests.test_wonn_layers.WONNLayerTest.",
+        "tests.test_wonn_layers.WONNCouplingTest.",
+        "tests.test_wonn_layers.OmegaTransitionTest.",
         "tests.test_wonn_model.WONNFormalCudaTest.",
         "tests.test_wonn_train_step.WONNTrainStepTest.",
     }

@@ -496,7 +496,8 @@ def analyze(
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--root", type=Path, default=Path("outputs/phase5/formal50k"),
+        "--root", type=Path,
+        default=Path("outputs/phase5/redesign_v2/formal50k"),
     )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--stage", choices=tuple(STAGES), required=True)

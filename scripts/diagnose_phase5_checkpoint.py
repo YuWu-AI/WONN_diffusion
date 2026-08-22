@@ -833,7 +833,8 @@ def diagnose_model(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--root", type=Path, default=Path("outputs/phase5/formal50k"),
+        "--root", type=Path,
+        default=Path("outputs/phase5/redesign_v2/formal50k"),
         help="Phase 5 formal run root.",
     )
     parser.add_argument("--output-dir", type=Path, required=True)
