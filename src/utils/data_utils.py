@@ -11,6 +11,31 @@ from utils.encoder_utils import build_self_attn_cond_masks
 from utils.logging_utils import log_for_0
 
 
+class ResumableDistributedSampler(DistributedSampler):
+    """DistributedSampler that can omit already-consumed local batches."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._start_index = 0
+
+    def set_start_batch(self, start_batch: int, local_batch_size: int) -> None:
+        if start_batch < 0 or local_batch_size <= 0:
+            raise ValueError("resume batch offset must be non-negative with positive batch size")
+        start_index = start_batch * local_batch_size
+        if start_index > super().__len__():
+            raise ValueError("resume batch offset exceeds sampler length")
+        self._start_index = start_index
+
+    def __iter__(self):
+        iterator = super().__iter__()
+        for _ in range(self._start_index):
+            next(iterator)
+        return iterator
+
+    def __len__(self):
+        return super().__len__() - self._start_index
+
+
 def _process_count() -> int:
     try:
         import torch.distributed as dist
@@ -123,13 +148,13 @@ def get_dataloader(
         pin_memory=True,
     )
     if distributed:
-        sampler = DistributedSampler(
+        sampler = ResumableDistributedSampler(
             dataset, num_replicas=_process_count(), rank=_process_index(),
             shuffle=shuffle, drop_last=drop_last, seed=0 if seed is None else seed,
         )
         return DataLoader(dataset, sampler=sampler, **common)
     if shuffle and seed is not None:
-        sampler = DistributedSampler(
+        sampler = ResumableDistributedSampler(
             dataset, num_replicas=1, rank=0, shuffle=True,
             drop_last=False, seed=seed,
         )

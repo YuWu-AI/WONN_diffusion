@@ -8,11 +8,29 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from utils.data_utils import get_dataloader
+from utils.data_utils import ResumableDistributedSampler, get_dataloader
 from utils.encoder_utils import build_self_attn_cond_masks
 
 
 class DataContractTest(unittest.TestCase):
+    def test_resumable_sampler_matches_uninterrupted_epoch_suffix(self):
+        dataset = list(range(40))
+        full = ResumableDistributedSampler(
+            dataset, num_replicas=1, rank=0, shuffle=True, seed=42,
+            drop_last=True,
+        )
+        full.set_epoch(3)
+        full_indices = list(full)
+
+        resumed = ResumableDistributedSampler(
+            dataset, num_replicas=1, rank=0, shuffle=True, seed=42,
+            drop_last=True,
+        )
+        resumed.set_epoch(3)
+        resumed.set_start_batch(start_batch=4, local_batch_size=3)
+        self.assertEqual(list(resumed), full_indices[12:])
+        self.assertEqual(len(resumed), len(full_indices) - 12)
+
     def test_condition_target_and_padding_masks(self):
         is_cond = np.array([[True, True, False, False, False]])
         is_valid = np.array([[True, True, True, True, False]])

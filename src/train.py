@@ -587,11 +587,23 @@ def run_training(config, *, force_cpu: bool = False):
 
         if hasattr(train_dataloader.sampler, "set_epoch"):
             train_dataloader.sampler.set_epoch(epoch)
+        epoch_resume_batches = (
+            steps_to_skip_in_epoch
+            if epoch == start_epoch and resume_step > 0
+            else 0
+        )
+        sampler_handles_resume = hasattr(
+            train_dataloader.sampler, "set_start_batch"
+        )
+        if sampler_handles_resume:
+            train_dataloader.sampler.set_start_batch(
+                epoch_resume_batches, local_batch_size,
+            )
 
         train_iterator = iter(train_dataloader)
         train_loader = prefetch_to_device(train_iterator, size=4)
 
-        initial_pbar = (resume_step - start_epoch * steps_per_epoch) if (epoch == start_epoch and resume_step > 0) else 0
+        initial_pbar = epoch_resume_batches
         epoch_pbar = tqdm(
             total=steps_per_epoch, desc=f"Epoch {epoch + 1}", initial=initial_pbar,
             mininterval=1.0, disable=rank != 0,
@@ -601,8 +613,15 @@ def run_training(config, *, force_cpu: bool = False):
             if global_step >= target_train_steps:
                 break
             # Skip already-processed batches when resuming mid-epoch
-            if epoch == start_epoch and step_in_epoch < steps_to_skip_in_epoch:
+            if (
+                not sampler_handles_resume
+                and epoch == start_epoch
+                and step_in_epoch < steps_to_skip_in_epoch
+            ):
                 continue
+            absolute_step_in_epoch = step_in_epoch + (
+                epoch_resume_batches if sampler_handles_resume else 0
+            )
             is_first_step = global_step == resume_step
             if is_first_step:
                 log_for_0("Performing initial training step, this may take longer...")
@@ -717,7 +736,9 @@ def run_training(config, *, force_cpu: bool = False):
                         f"lr={current_lr:.2e}, steps/sec={steps_per_sec:.2f}"
                     )
                     if config.use_wandb and wandb is not None:
-                        current_epoch_progress = epoch + (step_in_epoch + 1) / steps_per_epoch
+                        current_epoch_progress = (
+                            epoch + (absolute_step_in_epoch + 1) / steps_per_epoch
+                        )
                         try:
                             wandb_payload = {
                                 "train_loss": avg_loss, "train_l2_loss": avg_l2,
