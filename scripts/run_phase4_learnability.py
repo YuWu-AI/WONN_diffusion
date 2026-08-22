@@ -47,8 +47,10 @@ class ObjectiveResult:
     final_l2: float
     initial_ce: float
     final_ce: float
-    frequency_gate_delta: float
-    frequency_transition_delta: float
+    omega_alpha_delta: float
+    theta_embedding_delta: float
+    omega_input_projection_delta: float
+    omega_output_projection_delta: float
 
 
 @dataclass
@@ -155,18 +157,29 @@ def _build_model_state(config, device, text_encoder_dim, vocab_size, seed):
     return state
 
 
-def _parameter_snapshot(model) -> Tuple[torch.Tensor, torch.Tensor]:
-    if not hasattr(model, "layers"):
-        empty = torch.zeros(1)
-        return empty, empty
-    layer = model.layers[0]
-    if not hasattr(layer, "frequency_gate"):
-        empty = torch.zeros(1)
-        return empty, empty
-    return (
-        layer.frequency_gate.detach().float().cpu().clone(),
-        layer.frequency_transition.weight.detach().float().cpu().clone(),
-    )
+def _parameter_snapshot(model) -> Dict[str, torch.Tensor]:
+    empty = torch.zeros(1)
+    transitions = getattr(model, "omega_transitions", ())
+    if not transitions:
+        return {
+            "alpha": empty,
+            "theta_embedding": empty,
+            "input_projection": empty,
+            "output_projection": empty,
+        }
+    transition = transitions[0]
+    return {
+        "alpha": transition.raw_alpha.detach().float().cpu().clone(),
+        "theta_embedding": (
+            transition.theta_embedding.weight.detach().float().cpu().clone()
+        ),
+        "input_projection": (
+            transition.input_projection.weight.detach().float().cpu().clone()
+        ),
+        "output_projection": (
+            transition.output_projection.weight.detach().float().cpu().clone()
+        ),
+    }
 
 
 def run_fixed_objective(
@@ -189,7 +202,7 @@ def run_fixed_objective(
     frozen_encoder = FrozenBatchEncoder(
         batch["input_ids"], batch["encoder_attention_mask"].float(), latents
     ).to(device)
-    gate_before, transition_before = _parameter_snapshot(state.model)
+    parameters_before = _parameter_snapshot(state.model)
 
     first = last = None
     for _ in range(steps):
@@ -202,7 +215,7 @@ def run_fixed_objective(
         first = values if first is None else first
         last = values
 
-    gate_after, transition_after = _parameter_snapshot(state.model)
+    parameters_after = _parameter_snapshot(state.model)
     result = ObjectiveResult(
         parameters=sum(parameter.numel() for parameter in state.model.parameters()),
         initial_loss=first["loss"],
@@ -212,9 +225,26 @@ def run_fixed_objective(
         final_l2=last["l2_loss"],
         initial_ce=first["ce_loss"],
         final_ce=last["ce_loss"],
-        frequency_gate_delta=float((gate_after - gate_before).abs()),
-        frequency_transition_delta=float(
-            (transition_after - transition_before).norm()
+        omega_alpha_delta=float(
+            (parameters_after["alpha"] - parameters_before["alpha"]).abs()
+        ),
+        theta_embedding_delta=float(
+            (
+                parameters_after["theta_embedding"]
+                - parameters_before["theta_embedding"]
+            ).norm()
+        ),
+        omega_input_projection_delta=float(
+            (
+                parameters_after["input_projection"]
+                - parameters_before["input_projection"]
+            ).norm()
+        ),
+        omega_output_projection_delta=float(
+            (
+                parameters_after["output_projection"]
+                - parameters_before["output_projection"]
+            ).norm()
         ),
     )
     return state, result
@@ -314,8 +344,14 @@ def _verify(results):
         "mixed loss ratio <= 0.60": results["mixed"]["loss_ratio"] <= 0.60,
         "mixed L2 decreased": results["mixed"]["final_l2"] < results["mixed"]["initial_l2"],
         "mixed CE decreased": results["mixed"]["final_ce"] < results["mixed"]["initial_ce"],
-        "frequency gate changed": results["mixed"]["frequency_gate_delta"] > 0.0,
-        "frequency transition changed": results["mixed"]["frequency_transition_delta"] > 0.0,
+        "omega alpha changed": results["mixed"]["omega_alpha_delta"] > 0.0,
+        "theta embedding changed": results["mixed"]["theta_embedding_delta"] > 0.0,
+        "omega input projection changed": (
+            results["mixed"]["omega_input_projection_delta"] > 0.0
+        ),
+        "omega output projection changed": (
+            results["mixed"]["omega_output_projection_delta"] > 0.0
+        ),
         "conditional accuracy == 1": results["conditional"]["accuracy"] == 1.0,
         "source swap breaks labels": results["conditional"]["swapped_accuracy"] <= 0.25,
         "source swap changes predictions": results["conditional"]["prediction_change_fraction"] >= 0.75,

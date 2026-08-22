@@ -46,7 +46,6 @@ def make_tiny_wonn(
         num_layers=depth,
         num_inner_steps=1,
         num_heads=4,
-        qk_head_dim=8,
         attn_drop=dropout,
         proj_drop=dropout,
         bottleneck_dim=8,

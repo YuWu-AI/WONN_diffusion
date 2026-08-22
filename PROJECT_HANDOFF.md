@@ -79,22 +79,26 @@ ELF 仍在预训练语言模型的 contextual embedding space 中执行 Flow Mat
 - `src/configs/training_configs/`：官方 ELF YAML 与独立 WONN YAML。
 
 当前正式 `ELF-WONN-B` 为 384 oscillators、6 layers、每层 2 个 inner steps、12 个 coupling
-heads。frequency transition 只存在于相邻层之间，最后一层不再创建无输出作用的 frequency
-参数；当前参数量为 `30,028,271`。
+heads。每个 attention head 的维度固定为 `384 / 12 = 32`。独立 `OmegaTransition` 只存在于
+相邻层之间，最后一层后不创建无输出作用的参数；当前参数量为 `26,252,399`。
 
-attention 只生成 token coupling weights，用于聚合 `influence(theta)`；模型不保留标准
-Transformer 的 value residual 或 FFN。运行时代码不从只读的 `references/WONN/` 导入。
+每层先用逐振子 S/I MLP 计算 sensitivity 与 influence，再由 influence 经过完整
+`W_qkv -> attention -> head merge -> W_o -> RMSNorm -> ReLU` 产生 coupling field。
+普通路径使用 SDPA，只有 diagnostics 显式计算 attention weights；field 不含 influence residual、
+phase residual 或 Transformer FFN。运行时代码不从只读的 `references/WONN/` 导入。
 
 ### 3.4 最小可学性已验证
 
-正式 WONN 已在固定真实 T5/WMT14 batch 上分别完成 denoising MSE、decoding CE 和 mixed
-objective 的过拟合。frequency gate 与 transition weights 在训练中实际更新。
+旧交互架构曾在固定真实 T5/WMT14 batch 上完成 denoising、decoding 和 mixed objective 过拟合；
+该结果不能转移为新交互架构的质量证据。新架构已通过完整 coupling/transition 单元测试、正式
+`384x6x3` BF16 CUDA forward/backward，以及真实 WMT14 `batch=2` mixed 单步 smoke；S/I、
+QKV/O、theta embedding、omega FFN 和 alpha 均有直接梯度或参数更新检查。
 
 在 target latent 完全相同、仅 source 不同的 synthetic conditional task 中，交换 source 会使
 target prediction 随之翻转，说明模型能够使用条件信息。
 
-这些结果只排除了“无法训练”和“完全忽略 source”两类实现失败。固定 batch 过拟合不能证明
-泛化能力，也不能证明 WONN 优于 ELF。
+旧 synthetic source-swap 结果只排除了旧架构“完全忽略 source”的实现失败。新架构尚未完成
+短程 overfit、source-swap 复验或翻译质量实验；单 batch 有限梯度不能证明泛化能力或优于 ELF。
 
 ## 4. 端到端数据流
 
@@ -141,22 +145,26 @@ P(\theta)=[\sin\theta,\cos\theta].
 \left(\theta^{l,s}+\gamma_l\left[\omega^l+S(\theta^{l,s})\odot m^{l,s}\right]\right),
 \]
 
-其中 attentive coupling 决定 token 间影响：
+其中完整 attentive coupling 先从 $I(\theta)$ 生成 Q/K/V，再合并 heads 并通过输出投影：
 
 \[
-m_i=\sum_j A_{ij}I(\theta_j).
+F=\operatorname{ReLU}\left(\operatorname{RMSNorm}
+\left(W_o\operatorname{MergeHeads}
+\left[\operatorname{softmax}\left(\frac{QK^\top}{\sqrt{K/H}}\right)V\right]
+\right)\right).
 \]
 
-`theta` 在 layer 间连续传递；`omega` 只在相邻 layer 边界做 gated residual update。最终输出只
-从 phase features 读取，以避免绕过 oscillator dynamics。
+`theta` 在 layer 间原样传递；`omega` 只在相邻 layer 边界由
+`RMSNorm([ThetaEmbedding(theta), omega]) -> K-width FFN` 做有界 residual update。最终输出只从
+phase features 读取，以避免绕过 oscillator dynamics。
 
 这里必须区分三种时间：ELF flow time `t`、WONN depth `l` 和 layer 内 recurrent step `s`。
 
 ## 6. 当前已知约束
 
-- 当前 coupling 为获得 diagnostics 会显式物化 `[B,H,L,L]` attention weights；进入
-  1024/1088-token 任务前需要默认 SDPA 快路径，显式权重只用于诊断。
-- 30M 参数少于 ELF-B 的 105M，但 recurrent coupling 的真实 FLOPs、吞吐和采样开销必须实测；
+- 普通 coupling 已使用 SDPA；diagnostics 仍会显式物化 `[B,H,L,L]` attention weights，因此
+  长序列诊断必须控制 batch 和采样范围。
+- 26.25M 参数少于 ELF-B 的 105M，但 recurrent coupling 的真实 FLOPs、吞吐和采样开销必须实测；
   不能仅凭参数量宣称效率优势。
 - `references/WONN` 当前固定派生提交 `af3f468`，该对象尚未发布到 `.gitmodules` 指向的官方
   远程；对外提供全新 clone 前需要推送到可访问 fork 并更新 submodule URL。

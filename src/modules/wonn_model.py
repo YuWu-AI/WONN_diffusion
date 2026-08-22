@@ -18,7 +18,7 @@ from modules.layers import (
     TimestepEmbedder,
     _make_linear,
 )
-from modules.wonn_layers import WONNLayer, phase_features
+from modules.wonn_layers import OmegaTransition, WONNLayer, phase_features
 
 
 class WONNELF(nn.Module):
@@ -32,7 +32,6 @@ class WONNELF(nn.Module):
         num_layers: int = 6,
         num_inner_steps: int = 2,
         num_heads: int = 12,
-        qk_head_dim: int = 64,
         bottleneck_dim: int = 128,
         num_time_tokens: int = 4,
         num_self_cond_cfg_tokens: int = 4,
@@ -40,7 +39,6 @@ class WONNELF(nn.Module):
         vocab_size: int = 0,
         step_init: float = 0.1,
         step_max: float = 0.25,
-        coupling_mode: str = "learned",
         attn_drop: float = 0.0,
         proj_drop: float = 0.0,
         gradient_checkpointing: bool = False,
@@ -50,6 +48,12 @@ class WONNELF(nn.Module):
             raise ValueError("num_oscillators must be positive")
         if num_layers <= 0:
             raise ValueError("num_layers must be positive")
+        if num_heads <= 0:
+            raise ValueError("num_heads must be positive")
+        if num_oscillators % num_heads != 0:
+            raise ValueError("num_oscillators must be divisible by num_heads")
+        if (num_oscillators // num_heads) % 2 != 0:
+            raise ValueError("num_oscillators / num_heads must be even for 1D RoPE")
         if num_time_tokens <= 0:
             raise ValueError("num_time_tokens must be positive")
 
@@ -60,7 +64,7 @@ class WONNELF(nn.Module):
         self.depth = num_layers
         self.num_inner_steps = num_inner_steps
         self.num_heads = num_heads
-        self.qk_head_dim = qk_head_dim
+        self.head_dim = num_oscillators // num_heads
         self.bottleneck_dim = bottleneck_dim
         self.num_time_tokens = num_time_tokens
         self.num_self_cond_cfg_tokens = num_self_cond_cfg_tokens
@@ -99,7 +103,7 @@ class WONNELF(nn.Module):
             num_model_mode_tokens + num_time_tokens + num_self_cond_cfg_tokens
         )
         self.feat_rope = TextRotaryEmbeddingFast(
-            dim=qk_head_dim,
+            dim=self.head_dim,
             pt_seq_len=max_length,
             num_empty_token=prefix_total,
         )
@@ -117,16 +121,17 @@ class WONNELF(nn.Module):
                 WONNLayer(
                     num_oscillators=num_oscillators,
                     num_heads=num_heads,
-                    qk_head_dim=qk_head_dim,
                     num_inner_steps=num_inner_steps,
                     step_init=step_init,
                     step_max=step_max,
-                    coupling_mode=coupling_mode,
                     attn_drop=attn_drop,
-                    update_frequency=layer_index < num_layers - 1,
+                    proj_drop=proj_drop,
                 )
-                for layer_index in range(num_layers)
+                for _ in range(num_layers)
             ]
+        )
+        self.omega_transitions = nn.ModuleList(
+            [OmegaTransition(num_oscillators) for _ in range(num_layers - 1)]
         )
 
         self.final_layer = FinalLayer(
@@ -254,26 +259,37 @@ class WONNELF(nn.Module):
             and not collect_diagnostics
         )
         for index, layer in enumerate(self.layers):
+            transition = (
+                self.omega_transitions[index]
+                if index < len(self.omega_transitions)
+                else None
+            )
             if use_checkpoint:
-                def _layer_forward(
+                def _stage_forward(
                     phase: torch.Tensor,
                     frequency: torch.Tensor,
                     layer: WONNLayer = layer,
+                    transition: Optional[OmegaTransition] = transition,
                 ):
-                    next_phase, next_frequency, _ = layer(
+                    next_phase, _ = layer(
                         phase,
                         frequency,
                         rope_fn=self.feat_rope,
                         attention_mask=attention_mask,
                         deterministic=deterministic,
                     )
+                    next_frequency = frequency
+                    if transition is not None:
+                        next_phase, next_frequency, _ = transition(
+                            next_phase, frequency
+                        )
                     return next_phase, next_frequency
 
                 theta, omega = checkpoint(
-                    _layer_forward, theta, omega, use_reentrant=False
+                    _stage_forward, theta, omega, use_reentrant=False
                 )
             else:
-                theta, omega, layer_diagnostics = layer(
+                theta, layer_diagnostics = layer(
                     theta,
                     omega,
                     rope_fn=self.feat_rope,
@@ -288,6 +304,19 @@ class WONNELF(nn.Module):
                             for key, value in layer_diagnostics.items()
                         }
                     )
+                if transition is not None:
+                    theta, omega, transition_diagnostics = transition(
+                        theta,
+                        omega,
+                        collect_diagnostics=collect_diagnostics,
+                    )
+                    if collect_diagnostics:
+                        diagnostics.update(
+                            {
+                                f"transition_{index}/{key}": value
+                                for key, value in transition_diagnostics.items()
+                            }
+                        )
         if collect_diagnostics:
             mean_sin = torch.sin(theta.float()).mean()
             mean_cos = torch.cos(theta.float()).mean()
@@ -378,7 +407,6 @@ def WONN_ELF_B(**kwargs):
         "num_layers": 6,
         "num_inner_steps": 2,
         "num_heads": 12,
-        "qk_head_dim": 64,
     }
     defaults.update(kwargs)
     return WONNELF(**defaults)

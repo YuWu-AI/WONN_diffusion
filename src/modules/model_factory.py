@@ -42,10 +42,8 @@ def build_model(
                 "num_layers": config.wonn_num_layers,
                 "num_inner_steps": config.wonn_num_inner_steps,
                 "num_heads": config.wonn_num_heads,
-                "qk_head_dim": config.wonn_qk_head_dim,
                 "step_init": config.wonn_step_init,
                 "step_max": config.wonn_step_max,
-                "coupling_mode": config.wonn_coupling_mode,
             }
         )
         return MODEL_FACTORIES[config.model](**common_kwargs)

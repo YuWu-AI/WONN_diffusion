@@ -21,7 +21,7 @@ WMT14 翻译不再承担主要研究结论。新 Phase 1 只用它验证代码�
 
 ```text
 branch:   phase5-wmt14
-commit:   e33842c
+commit:   3e9f016
 worktree: .worktrees/phase5-wmt14
 ```
 
@@ -37,19 +37,24 @@ worktree: .worktrees/phase5-wmt14
 - WMT14 ELF/WONN 独立实验 YAML、profiling、后台流水线和 13 项训练工程测试（测试文件当前仍名为
   `tests/test_phase5_training.py`）；
 - 单机单卡与单机多卡 `torchrun` 启动入口。
+- 新 WONN 文本交互：逐振子 S/I MLP、完整 QKV/O、默认 SDPA，以及独立
+  `OmegaTransition`；旧 QK dimension/coupling mode/warm-start 入口已移除。
+
+新交互已在该 clean commit 上通过 100 项无跳过 CUDA 全套测试、正式 `384x6x3` BF16
+forward/backward，以及真实 WMT14 `batch=2` mixed 单步 smoke。相同 WONN 核心已人工整合到
+`main`，并在 `main` 独立通过 55 项无跳过 CUDA 全套测试；对应 scoped commit 作为后续架构基线。
 
 这些代码尚未成为新的可执行主线，原因是：
 
 1. 通用训练能力仍在 `phase5-wmt14`，尚未与 `main` 整合；
-2. `main` 工作树当前包含尚未提交的“最后一层移除无效 frequency transition”修正，与分支内
-   WONN 文件有重叠，需要人工整合而不是直接覆盖；
+2. WONN 交互重构已人工整合并验证，但 Phase 5 通用训练基础设施尚未整合到 `main`；
 3. Phase 1 shell 脚本仍含本机绝对 Python/include 路径、强制 Hugging Face offline 和
    `notify-send`，不能原样部署云端；
 4. WMT14 专用 YAML 和 pipeline 应与任务无关的训练基础设施分开；
 5. 云端运行必须固定 clean commit，当前 dirty `main` 不能直接作为实验版本。
 
-因此当前准确状态是：**训练基础设施已经在隔离分支实现并通过代码级测试，但仍需整合和云端化，
-之后才从头产生新的实验结果。**
+因此当前准确状态是：**WONN 交互重构已在隔离分支验证并进入 `main`，但通用训练基础设施仍需
+继续整合和云端化；完成 clean commit 与短程 from-scratch pilot 后才能产生新的实验结果。**
 
 ## 3. Phase 1：云端工程基线
 
@@ -60,8 +65,9 @@ worktree: .worktrees/phase5-wmt14
 
 ### 代码工作
 
-1. 以 `main` 的正式 WONN 实现为架构真身，逐项引入 `phase5-wmt14` 的通用训练能力。
-2. 保留最后一层不创建 frequency transition 的当前修正，并补兼容 checkpoint 的明确策略。
+1. 以 `main` 的新 WONN 交互实现为架构真身，逐项引入 `phase5-wmt14` 的通用训练能力。
+2. 保持独立 `OmegaTransition` 仅有 `L-1` 个；旧 WONN checkpoint 必须明确失败，不做迁移或
+   部分加载。
 3. 将脚本改为相对项目路径或可配置环境变量；移除本机 include、桌面通知和强制 offline 假设。
 4. 保留官方 ELF YAML；新实验使用独立 YAML，不覆盖 upstream 配置。
 5. 把 WMT14 专用 pipeline 与公共 train/eval/checkpoint 工具分开。
@@ -99,8 +105,7 @@ Gen. PPL 与 unigram entropy 的联合曲线，而不是单独优化其中一个
 
 1. 从官方 `train_owt_ELF-B.yml` 派生独立 `train_owt_ELF-WONN-B.yml`，只改变 backbone、
    WONN 超参数、资源 batch/accumulation 和输出目录。
-2. 将 coupling 默认路径改为 SDPA，避免显式物化 `[B,H,L,L]`；
-   `forward_with_diagnostics()` 才计算完整 attention weights。
+2. coupling 已改为默认 SDPA；保持 `forward_with_diagnostics()` 才计算完整 attention weights。
 3. 增加 1024-token BF16 forward/backward、gradient checkpointing、DDP、resume 和生成测试。
 4. 固定 GPT-2 Large PPL evaluator、tokenizer、数据 revision 和采样 sweep。
 
@@ -173,7 +178,7 @@ Phase 3 不早于 Phase 2 的长序列 gate；否则无法区分 backbone 长序
 
 ## 8. 下一步唯一主线
 
-1. 整合 `phase5-wmt14` 的通用训练代码与 `main` 的 WONN frequency 修正。
-2. 完成脚本云端可移植化和 Phase 1 的本地 smoke。
-3. 固定 clean commit，在云端从头跑新 Phase 1。
+1. 以已独立验证的新 WONN `main` scoped commit 作为架构基线。
+2. 整合 `phase5-wmt14` 的通用训练基础设施，完成脚本云端可移植化和 Phase 1 本地 smoke。
+3. 固定 clean commit，在云端先跑短程 from-scratch pilot，再决定正式 Phase 1。
 4. Phase 1 工程验收后立即进入 Phase 2 OWT，不继续扩展 WMT14。
