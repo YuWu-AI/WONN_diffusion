@@ -12,9 +12,10 @@ from utils.logging_utils import log_for_0
 class T5EncoderConfig:
     """Configuration class for T5Encoder."""
 
-    def __init__(self, model_name: str, dtype: Any):
+    def __init__(self, model_name: str, dtype: Any, revision: str = None):
         self.model_name = model_name
         self.dtype = dtype
+        self.revision = revision
         self.vocab_size: int = 0
         self.d_model: int = 0
         self.d_kv: int = 0
@@ -24,8 +25,10 @@ class T5EncoderConfig:
         self.is_gated_act: bool = False
 
     @classmethod
-    def from_pretrained(cls, model_name: str, dtype: Any = torch.float32) -> "T5EncoderConfig":
-        cfg = cls(model_name, dtype)
+    def from_pretrained(
+        cls, model_name: str, dtype: Any = torch.float32, revision: str = None,
+    ) -> "T5EncoderConfig":
+        cfg = cls(model_name, dtype, revision)
         defaults = {
             "t5-small": dict(vocab_size=32128, d_model=512, d_kv=64, d_ff=2048,
                              num_layers=6, num_heads=8, is_gated_act=False),
@@ -48,9 +51,13 @@ class T5Encoder(nn.Module):
         from transformers import T5EncoderModel, T5Config
 
         if pretrained:
-            self.model = T5EncoderModel.from_pretrained(config.model_name)
+            self.model = T5EncoderModel.from_pretrained(
+                config.model_name, revision=config.revision,
+            )
         else:
-            hf_config = T5Config.from_pretrained(config.model_name)
+            hf_config = T5Config.from_pretrained(
+                config.model_name, revision=config.revision,
+            )
             self.model = T5EncoderModel(hf_config)
 
         hf = self.model.config
@@ -80,10 +87,12 @@ class T5Encoder(nn.Module):
         return out.last_hidden_state
 
 
-def get_encoder(model_name: str, dtype: Any):
+def get_encoder(model_name: str, dtype: Any, revision: str = None):
     """Return `(config, model)`. Weights are downloaded on first use."""
     log_for_0(f"Loading T5 Encoder: {model_name}...")
-    config = T5EncoderConfig.from_pretrained(model_name, dtype=dtype)
+    config = T5EncoderConfig.from_pretrained(
+        model_name, dtype=dtype, revision=revision,
+    )
     model = T5Encoder(config, pretrained=True)
     if dtype is not None:
         model = model.to(dtype)

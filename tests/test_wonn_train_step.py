@@ -4,6 +4,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -67,6 +68,53 @@ class WONNTrainStepTest(unittest.TestCase):
         self.assertEqual(state.step, 1)
         self.assertTrue(all(torch.isfinite(value) for value in metrics.values()))
         self.assertFalse(torch.equal(before, model.phase_projection.weight))
+
+    def test_disabled_auxiliary_objective_does_not_call_auxiliary_forward(self):
+        torch.manual_seed(53)
+        model = make_tiny_wonn().train()
+        state = TrainState(
+            model=model,
+            optimizer=torch.optim.AdamW(model.parameters(), lr=1e-3),
+            ema_params1=TrainState.init_ema(model),
+            dropout_generator=torch.Generator().manual_seed(59),
+        )
+        config = Config()
+        config.use_bf16 = False
+        config.max_length = 6
+        config.pad_token = "pad"
+        config.num_self_cond_cfg_tokens = 0
+        config.self_cond_prob = 0.0
+        config.decoder_prob = 0.5
+        config.label_drop_prob = 0.0
+        config.grad_accum_steps = 1
+        batch = {
+            "input_ids": torch.randint(0, 23, (2, 6)),
+            "encoder_attention_mask": torch.ones(2, 6, 6),
+            "attention_mask": torch.ones(2, 6),
+            "cond_seq_mask": torch.tensor(
+                [[1, 1, 0, 0, 0, 0], [1, 1, 1, 0, 0, 0]],
+                dtype=torch.float32,
+            ),
+        }
+        cfg_scales = []
+        hook = model.register_forward_pre_hook(
+            lambda _module, _args, kwargs: cfg_scales.append(
+                kwargs.get("self_cond_cfg_scale")
+            ),
+            with_kwargs=True,
+        )
+        with mock.patch(
+            "train_step.compute_denoiser_auxiliary_loss",
+            side_effect=AssertionError("auxiliary path was called"),
+        ):
+            _, metrics = train_step(
+                state, encoder=DummyEncoder(), batch=batch, config=config
+            )
+        hook.remove()
+        self.assertNotIn("aux_loss", metrics)
+        self.assertIn("ce_loss_sum", metrics)
+        self.assertIn("ce_token_count", metrics)
+        self.assertEqual(cfg_scales, [None])
 
 
 if __name__ == "__main__":

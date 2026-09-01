@@ -1,5 +1,9 @@
 # WONN 文本交互机制重构计划
 
+> 历史设计记录：该计划已经完成并整合到 `main`。其中的 `phase5-wmt14`、worktree 和旧输出路径
+> 仅用于说明当时的实施过程；当前代码与实验入口以 [`PROJECT_STRUCTURE.md`](PROJECT_STRUCTURE.md)
+> 为准。
+
 ## 1. 目标与结论
 
 当前 ELF-WONN 的 attentive coupling 不是原始 WONN `StandardAttention` 的等价文本实现：它只用

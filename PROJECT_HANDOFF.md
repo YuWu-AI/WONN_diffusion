@@ -1,6 +1,6 @@
 # ELF-WONN 项目总览与技术基线
 
-> 状态基线：2026-08-11
+> 状态基线：2026-09-01
 > 本文只记录已经确定的项目事实、架构边界和已完成基础；后续阶段与执行顺序见
 > [`docs/RESEARCH_PLAN.md`](docs/RESEARCH_PLAN.md)。
 
@@ -176,8 +176,13 @@ phase features 读取，以避免绕过 oscillator dynamics。
 | --- | --- |
 | `README.md` | 快速开始与代码导航 |
 | `docs/RESEARCH_PLAN.md` | 新 Phase 1–3、当前代码进度和云端执行门槛 |
+| `docs/PROJECT_STRUCTURE.md` | 代码分层、Phase 5 脚本/配置和本地数据索引 |
 | `docs/ENVIRONMENT.md` | 已验证本机环境与依赖快照 |
 | `docs/ELF_UPSTREAM_README.md` | ELF 官方 PyTorch 命令与参考指标 |
 | `src/modules/` | ELF 与 WONN 正式模型实现 |
 | `tests/`、`scripts/verify_phase*.py` | 契约和回归验收 |
 | `references/` | 只读上游参考实现 |
+
+原 `phase5-wmt14` 分支中的 optimizer-step 训练预算、checkpoint/resume、manifest、独立评测、
+机制诊断和 L12/K768/90K 流水线已经整合到 `main`。这些能力不改变第 2 节的 ELF 接口边界；
+旧 Phase 5 产物仍是历史诊断数据，不自动升级为新研究计划的正式结论。

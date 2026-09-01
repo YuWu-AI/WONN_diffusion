@@ -1,4 +1,5 @@
 import json
+import os
 from typing import Dict, Optional
 
 import numpy as np
@@ -8,6 +9,31 @@ from torch.utils.data.distributed import DistributedSampler
 
 from utils.encoder_utils import build_self_attn_cond_masks
 from utils.logging_utils import log_for_0
+
+
+class ResumableDistributedSampler(DistributedSampler):
+    """DistributedSampler that can omit already-consumed local batches."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._start_index = 0
+
+    def set_start_batch(self, start_batch: int, local_batch_size: int) -> None:
+        if start_batch < 0 or local_batch_size <= 0:
+            raise ValueError("resume batch offset must be non-negative with positive batch size")
+        start_index = start_batch * local_batch_size
+        if start_index > super().__len__():
+            raise ValueError("resume batch offset exceeds sampler length")
+        self._start_index = start_index
+
+    def __iter__(self):
+        iterator = super().__iter__()
+        for _ in range(self._start_index):
+            next(iterator)
+        return iterator
+
+    def __len__(self):
+        return super().__len__() - self._start_index
 
 
 def _process_count() -> int:
@@ -81,6 +107,7 @@ def get_dataloader(
     pad_token_id: int = 0,
     max_input_seq_length: Optional[int] = None,
     distributed: bool = True,
+    seed: Optional[int] = None,
 ):
     """Create a DataLoader."""
 
@@ -121,12 +148,21 @@ def get_dataloader(
         pin_memory=True,
     )
     if distributed:
-        sampler = DistributedSampler(
+        sampler = ResumableDistributedSampler(
             dataset, num_replicas=_process_count(), rank=_process_index(),
-            shuffle=shuffle, drop_last=drop_last,
+            shuffle=shuffle, drop_last=drop_last, seed=0 if seed is None else seed,
         )
         return DataLoader(dataset, sampler=sampler, **common)
-    return DataLoader(dataset, shuffle=shuffle, **common)
+    if shuffle and seed is not None:
+        sampler = ResumableDistributedSampler(
+            dataset, num_replicas=1, rank=0, shuffle=True,
+            drop_last=False, seed=seed,
+        )
+        return DataLoader(dataset, sampler=sampler, **common)
+    generator = None
+    if seed is not None:
+        generator = torch.Generator(device="cpu").manual_seed(seed)
+    return DataLoader(dataset, shuffle=shuffle, generator=generator, **common)
 
 
 def load_jsonl_dataset(path, tokenizer, input_key="input", output_key="output"):
@@ -161,14 +197,33 @@ def _looks_like_save_to_disk_arrow(ds) -> bool:
     )
 
 
-def load_dataset_split(path: str, dataset_cache_dir=None):
+def load_dataset_split(path: str, dataset_cache_dir=None, revision: str = None):
     """Load a dataset. Tries HuggingFace Hub first; falls back to local on-disk Arrow."""
     from datasets import DatasetDict, load_dataset as hf_load_dataset, load_from_disk
     ds = None
+    hub_error = None
     try:
-        ds = hf_load_dataset(path, cache_dir=dataset_cache_dir)
-    except Exception:
-        ds = load_from_disk(path)
+        ds = hf_load_dataset(path, cache_dir=dataset_cache_dir, revision=revision)
+    except Exception as exc:
+        hub_error = exc
+        if isinstance(path, str) and os.path.isdir(path):
+            ds = load_from_disk(path)
+        else:
+            from huggingface_hub import snapshot_download
+            try:
+                local_dir = snapshot_download(
+                    repo_id=path,
+                    repo_type="dataset",
+                    cache_dir=dataset_cache_dir,
+                    revision=revision,
+                    local_files_only=os.environ.get("HF_HUB_OFFLINE") == "1",
+                )
+                ds = load_from_disk(local_dir)
+            except Exception as snapshot_error:
+                raise RuntimeError(
+                    f"Failed to load dataset {path!r} from the Hub cache or local disk: "
+                    f"hub={hub_error}; snapshot={snapshot_error}"
+                ) from snapshot_error
 
     if isinstance(ds, DatasetDict):
         splits = list(ds.keys())
@@ -182,7 +237,10 @@ def load_dataset_split(path: str, dataset_cache_dir=None):
             f"Dataset at {path!r} looks like a save_to_disk-format HF repo; "
             f"re-downloading via snapshot_download + load_from_disk."
         )
-        local_dir = snapshot_download(repo_id=path, repo_type="dataset", cache_dir=dataset_cache_dir)
+        local_dir = snapshot_download(
+            repo_id=path, repo_type="dataset", cache_dir=dataset_cache_dir,
+            revision=revision,
+        )
         ds = load_from_disk(local_dir)
         if isinstance(ds, DatasetDict):
             splits = list(ds.keys())
@@ -197,12 +255,17 @@ def load_dataset_split(path: str, dataset_cache_dir=None):
 def load_dataset(config, dataset_cache_dir=None):
     """Resolve config.data_path / config.eval_data_path into train/eval datasets."""
     log_for_0(f"Loading dataset from {config.data_path}...")
-    train_dataset = load_dataset_split(config.data_path, dataset_cache_dir)
+    train_dataset = load_dataset_split(
+        config.data_path, dataset_cache_dir, getattr(config, "data_revision", None),
+    )
     log_for_0(f"Train size: {len(train_dataset)}")
 
     eval_dataset = None
     if config.eval_data_path:
-        eval_dataset = load_dataset_split(config.eval_data_path, dataset_cache_dir)
+        eval_dataset = load_dataset_split(
+            config.eval_data_path, dataset_cache_dir,
+            getattr(config, "eval_data_revision", None),
+        )
         log_for_0(f"Eval size: {len(eval_dataset)}")
     else:
         log_for_0("No eval dataset")

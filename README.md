@@ -18,6 +18,9 @@ sampler 和 shared decoder 不变。
 当前代码进度、任务差异和验收 gate 见 [`docs/RESEARCH_PLAN.md`](docs/RESEARCH_PLAN.md)。
 本地旧 Phase 5 实验数据不作为新计划结论，后续数据统一在云端重新产生。
 
+原 `phase5-wmt14` 的训练、恢复、评测和产物审计能力现已进入 `main`。代码导航、脚本分组、
+配置用途与本地实验数据位置统一见 [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md)。
+
 ## 项目结构
 
 ```text
@@ -29,8 +32,10 @@ sampler 和 shared decoder 不变。
 ├── tests/                       # 模型、数据、采样和训练契约测试
 ├── docs/
 │   ├── RESEARCH_PLAN.md         # 新 Phase 1–3 与云端执行计划
+│   ├── PROJECT_STRUCTURE.md     # 代码、实验入口与产物目录索引
 │   ├── ENVIRONMENT.md           # 已验证本机环境和依赖
 │   └── ELF_UPSTREAM_README.md   # ELF 官方 PyTorch 使用说明
+├── outputs/                     # Git 忽略的 checkpoint、评测和历史实验数据
 ├── papers/                      # ELF/WONN 论文
 ├── references/                  # 只读上游参考实现
 ├── PROJECT_HANDOFF.md           # 项目总览、架构边界和已完成基础
@@ -65,6 +70,9 @@ uv pip sync --python .venv/bin/python requirements-lock.txt
 
 # 官方单卡训练入口
 bash scripts/launch.sh train src/configs/training_configs/train_owt_ELF-B.yml
+
+# Phase 5 L12/K768/90K 主流水线；云端建议在 tmux 中直接运行
+bash scripts/run_wonn_l12k768_90k_pipeline.sh
 ```
 
 训练产物统一写入 `outputs/` 等 Git 忽略目录，不提交 checkpoint、日志、生成样本、缓存或本地

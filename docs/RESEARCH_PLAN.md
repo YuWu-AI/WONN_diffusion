@@ -1,6 +1,6 @@
 # ELF-WONN 新阶段研究计划
 
-> 计划重置日期：2026-08-11
+> 计划重置日期：2026-08-11；代码状态更新：2026-09-01
 > Phase 1–4 的基础实现与验收已经完成，统一沉淀在
 > [`PROJECT_HANDOFF.md`](../PROJECT_HANDOFF.md)。本文从新的 Phase 1 重新编号。
 
@@ -17,15 +17,7 @@ WMT14 翻译不再承担主要研究结论。新 Phase 1 只用它验证代码�
 
 ## 2. Phase 1 当前代码进度
 
-原 Phase 5 的实现位于独立分支和 worktree：
-
-```text
-branch:   phase5-wmt14
-commit:   3e9f016
-worktree: .worktrees/phase5-wmt14
-```
-
-该分支当前是干净的，已经实现：
+原 Phase 5 的实现已经从 `phase5-wmt14` 正式合并到 `main`。当前主线已经实现：
 
 - 按 optimizer step 精确限制训练预算；
 - 在指定 step 保存 checkpoint；
@@ -36,25 +28,20 @@ worktree: .worktrees/phase5-wmt14
 - checkpoint 结构、finite values、生成工件和指标的汇总校验；
 - WMT14 ELF/WONN 独立实验 YAML、profiling、后台流水线和 13 项训练工程测试（测试文件当前仍名为
   `tests/test_phase5_training.py`）；
-- 单机单卡与单机多卡 `torchrun` 启动入口。
+- 单机单卡与单机多卡 `torchrun` 启动入口；
 - 新 WONN 文本交互：逐振子 S/I MLP、完整 QKV/O、默认 SDPA，以及独立
-  `OmegaTransition`；旧 QK dimension/coupling mode/warm-start 入口已移除。
+  `OmegaTransition`；旧 QK dimension/coupling mode/warm-start 入口已移除；
+- L6/T3 50K/130K、机制消融和 L12/K768/T3 90K 的独立配置、流水线与分析入口；
+- 相对项目路径和 `DLM_WONN_PYTHON`、`DLM_WONN_ELF_BASELINE` 等环境变量覆盖；正式流水线
+  只要求 clean checkout，不再依赖特定 worktree。
 
-新交互已在该 clean commit 上通过 100 项无跳过 CUDA 全套测试、正式 `384x6x3` BF16
-forward/backward，以及真实 WMT14 `batch=2` mixed 单步 smoke。相同 WONN 核心已人工整合到
-`main`，并在 `main` 独立通过 55 项无跳过 CUDA 全套测试；对应 scoped commit 作为后续架构基线。
+历史验证记录见 `docs/WONN_TEXT_INTERACTION_REDESIGN_VALIDATION.md`；当前入口和产物路径以
+`docs/PROJECT_STRUCTURE.md` 为准。桌面 `systemd-run` launcher 仅是本地便利封装，云端容器直接
+运行对应 `run_*_pipeline.sh`。脚本默认复用本地缓存；全新云端首次下载时显式设置
+`HF_HUB_OFFLINE=0 HF_DATASETS_OFFLINE=0`。
 
-这些代码尚未成为新的可执行主线，原因是：
-
-1. 通用训练能力仍在 `phase5-wmt14`，尚未与 `main` 整合；
-2. WONN 交互重构已人工整合并验证，但 Phase 5 通用训练基础设施尚未整合到 `main`；
-3. Phase 1 shell 脚本仍含本机绝对 Python/include 路径、强制 Hugging Face offline 和
-   `notify-send`，不能原样部署云端；
-4. WMT14 专用 YAML 和 pipeline 应与任务无关的训练基础设施分开；
-5. 云端运行必须固定 clean commit，当前 dirty `main` 不能直接作为实验版本。
-
-因此当前准确状态是：**WONN 交互重构已在隔离分支验证并进入 `main`，但通用训练基础设施仍需
-继续整合和云端化；完成 clean commit 与短程 from-scratch pilot 后才能产生新的实验结果。**
+当前剩余工程门槛是：在 clean merge commit 上重新完成 CPU 回归、CUDA single-batch、故意中断/
+resume 和云端硬件 smoke，再启动新的云端实验。历史本地输出继续保留，但只作为诊断与复现材料。
 
 ## 3. Phase 1：云端工程基线
 
@@ -65,10 +52,10 @@ forward/backward，以及真实 WMT14 `batch=2` mixed 单步 smoke。相同 WONN
 
 ### 代码工作
 
-1. 以 `main` 的新 WONN 交互实现为架构真身，逐项引入 `phase5-wmt14` 的通用训练能力。
+1. 以 `main` 的新 WONN 交互实现和已合并的 Phase 5 通用训练能力为唯一代码主线。
 2. 保持独立 `OmegaTransition` 仅有 `L-1` 个；旧 WONN checkpoint 必须明确失败，不做迁移或
    部分加载。
-3. 将脚本改为相对项目路径或可配置环境变量；移除本机 include、桌面通知和强制 offline 假设。
+3. 脚本使用相对项目路径或可配置环境变量；桌面通知仅作为可选本地行为，云端直接运行 pipeline。
 4. 保留官方 ELF YAML；新实验使用独立 YAML，不覆盖 upstream 配置。
 5. 把 WMT14 专用 pipeline 与公共 train/eval/checkpoint 工具分开。
 6. 为云端运行记录 commit、配置、依赖、GPU、数据 revision、随机种子和输出目录。
@@ -178,7 +165,7 @@ Phase 3 不早于 Phase 2 的长序列 gate；否则无法区分 backbone 长序
 
 ## 8. 下一步唯一主线
 
-1. 以已独立验证的新 WONN `main` scoped commit 作为架构基线。
-2. 整合 `phase5-wmt14` 的通用训练基础设施，完成脚本云端可移植化和 Phase 1 本地 smoke。
-3. 固定 clean commit，在云端先跑短程 from-scratch pilot，再决定正式 Phase 1。
+1. 在合并后的 `main` 完成 CPU、CUDA single-batch、checkpoint/resume 和 pipeline preflight。
+2. 将 clean commit、代码仓库和所需历史 baseline 上传到云端持久卷。
+3. 在云端先跑短程 from-scratch pilot，再决定正式 Phase 1。
 4. Phase 1 工程验收后立即进入 Phase 2 OWT，不继续扩展 WMT14。

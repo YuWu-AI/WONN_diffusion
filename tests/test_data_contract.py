@@ -8,11 +8,29 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from utils.data_utils import get_dataloader
+from utils.data_utils import ResumableDistributedSampler, get_dataloader
 from utils.encoder_utils import build_self_attn_cond_masks
 
 
 class DataContractTest(unittest.TestCase):
+    def test_resumable_sampler_matches_uninterrupted_epoch_suffix(self):
+        dataset = list(range(40))
+        full = ResumableDistributedSampler(
+            dataset, num_replicas=1, rank=0, shuffle=True, seed=42,
+            drop_last=True,
+        )
+        full.set_epoch(3)
+        full_indices = list(full)
+
+        resumed = ResumableDistributedSampler(
+            dataset, num_replicas=1, rank=0, shuffle=True, seed=42,
+            drop_last=True,
+        )
+        resumed.set_epoch(3)
+        resumed.set_start_batch(start_batch=4, local_batch_size=3)
+        self.assertEqual(list(resumed), full_indices[12:])
+        self.assertEqual(len(resumed), len(full_indices) - 12)
+
     def test_condition_target_and_padding_masks(self):
         is_cond = np.array([[True, True, False, False, False]])
         is_valid = np.array([[True, True, True, True, False]])
@@ -73,6 +91,51 @@ class DataContractTest(unittest.TestCase):
         np.testing.assert_array_equal(batch["cond_seq_mask"][1], [1, 0, 0, 0, 0, 0])
         np.testing.assert_array_equal(batch["attention_mask"][0], [1, 1, 1, 1, 0, 0])
         np.testing.assert_array_equal(batch["attention_mask"][1], [1, 1, 1, 1, 1, 0])
+
+    def test_seeded_shuffle_is_reproducible(self):
+        dataset = [
+            {"input_ids": [i + 2], "index": i}
+            for i in range(12)
+        ]
+
+        def shuffled_indices(seed):
+            loader = get_dataloader(
+                dataset,
+                batch_size=3,
+                shuffle=True,
+                num_workers=0,
+                drop_last=False,
+                max_seq_length=2,
+                pad_token_id=0,
+                distributed=False,
+                seed=seed,
+            )
+            return [index for batch in loader for index in batch["index"]]
+
+        first = shuffled_indices(42)
+        self.assertEqual(first, shuffled_indices(42))
+        self.assertNotEqual(first, shuffled_indices(43))
+
+    def test_seeded_shuffle_is_reproducible_by_epoch(self):
+        dataset = [{"input_ids": [i + 2], "index": i} for i in range(12)]
+
+        def epoch_indices(epoch):
+            loader = get_dataloader(
+                dataset,
+                batch_size=3,
+                shuffle=True,
+                num_workers=0,
+                drop_last=False,
+                max_seq_length=2,
+                pad_token_id=0,
+                distributed=False,
+                seed=42,
+            )
+            loader.sampler.set_epoch(epoch)
+            return [index for batch in loader for index in batch["index"]]
+
+        self.assertNotEqual(epoch_indices(0), epoch_indices(1))
+        self.assertEqual(epoch_indices(1), epoch_indices(1))
 
 
 if __name__ == "__main__":

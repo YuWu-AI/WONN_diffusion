@@ -1,6 +1,9 @@
 # WONN 文本交互重构验证记录
 
-## 1. 当前范围
+> 本文保留重构发生时的分支、命令和输出路径作为历史证据。重构和 Phase 5 训练基础设施现已进入
+> `main`；当前入口与产物位置见 [`PROJECT_STRUCTURE.md`](PROJECT_STRUCTURE.md)。
+
+## 1. 当时范围
 
 - Phase 5 先行实现：`phase5-wmt14` commit `3e9f016`。
 - `main`：已人工迁移 WONN 模块、正式配置、checkpoint fail-fast 和对应测试；不迁移 Phase 5

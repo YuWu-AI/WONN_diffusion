@@ -31,15 +31,20 @@ class Config:
     # Dataset
     data_path: str = None
     eval_data_path: str = None
+    data_revision: str = None
+    eval_data_revision: str = None
+    data_manifest_path: str = None
     max_length: int = 128
     max_input_length: int = None  # Max length for conditioning input (e.g., prompt or encoder input); None = no limit
     pad_token: str = "pad"  # "pad" or "eos" - which token to use for padding
 
     # Tokenizer
     tokenizer_name: str = None  # Defaults to encoder_model_name if not set
+    tokenizer_revision: str = None
 
     # Encoder
     encoder_model_name: str = "t5-small"
+    encoder_revision: str = None
     encoder_checkpoint: str = None
     latent_mean: float = 0.0
     latent_std: float = 1.0
@@ -68,6 +73,16 @@ class Config:
     t_eps: float = 5e-2
     time_schedule: str = "logit_normal"  # 'logit_normal' or 'uniform'
 
+    # Optional semantic supervision on denoiser-predicted x0. Defaults preserve
+    # the original Flow Matching training path without extra RNG or forwards.
+    denoiser_token_loss_weight: float = 0.0
+    denoiser_source_contrastive_weight: float = 0.0
+    denoiser_aux_max_t: float = 0.25
+    denoiser_aux_start_step: int = 0
+    denoiser_aux_warmup_steps: int = 0
+    denoiser_source_contrastive_prob: float = 1.0
+    denoiser_source_contrastive_margin: float = 0.1
+
     # Decoder objective
     decoder_prob: float = 0.5  # Probability of decoder (CE) step vs denoiser (L2) step
     decoder_noise_scale: float = 1.0  # Scale of noise in logit-normal-noised latent for CE branch
@@ -95,6 +110,8 @@ class Config:
     adam_b1: float = 0.9
     adam_b2: float = 0.95
     grad_accum_steps: int = 1  # Gradient accumulation steps (optimizer updates every K mini-batches)
+    max_optimizer_steps: int = None  # Optional exact optimizer-step budget; None trains all epochs.
+    stop_optimizer_steps: int = None  # Optional staged stop; keeps the max-step LR schedule unchanged.
     use_bf16: bool = True  # Use CUDA BF16 autocast for training/eval forward passes.
     use_compile: bool = False  # Wrap the eval/sampling model in torch.compile.
     compile_train: bool = True  # Wrap the training model in torch.compile.
@@ -119,11 +136,14 @@ class Config:
     log_freq: int = 100
     eval_freq: int = 10
     save_freq: float = 100  # Can be fractional (e.g., 0.1 for saving every 0.1 epoch)
+    save_optimizer_steps: str = None  # Optional comma-separated optimizer steps.
+    final_eval: bool = True  # Run generation after saving the terminal checkpoint.
 
     # Output
     output_dir: str = "./output_dir"
     hf_repo_id: str = None  # Optional HF repo id to mirror local outputs/checkpoints.
     resume: str = None
+    init_from: str = None  # Load model/EMA weights, but start fresh optimizer and step 0.
 
     # Wandb
     use_wandb: bool = False
