@@ -19,6 +19,14 @@ if str(REPO_ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from summarize_phase5_run import _audit_checkpoint
+from phase5_artifacts import (
+    checkpoint_path,
+    completion_path,
+    config_path,
+    retained_checkpoint_steps,
+    source_commit_path,
+    training_metric_paths,
+)
 
 
 MODEL_SPECS = {
@@ -187,27 +195,29 @@ def _load_evaluation(run_dir: Path, step: int, expected_count: int) -> dict:
     }
 
 
-def _validate_resolved_config(run_dir: Path, label: str, spec: dict):
-    config_path = run_dir / "config.yml"
-    config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+def _validate_resolved_config(
+    run_dir: Path, label: str, spec: dict, target_step: int,
+):
+    resolved_config_path = config_path(run_dir, target_step)
+    config = yaml.safe_load(resolved_config_path.read_text(encoding="utf-8")) or {}
     if config.get("model") != spec["config_model"]:
-        raise ValueError(f"{config_path} does not describe {label}")
+        raise ValueError(f"{resolved_config_path} does not describe {label}")
     if config.get("batch_size") != 12 or config.get("seed") != 42:
-        raise ValueError(f"{config_path} has the wrong batch size or seed")
+        raise ValueError(f"{resolved_config_path} has the wrong batch size or seed")
     if config.get("init_from") is not None:
-        raise ValueError(f"{config_path} is not a from-scratch run")
+        raise ValueError(f"{resolved_config_path} is not a from-scratch run")
     expected_inner_steps = spec["wonn_inner_steps"]
     if expected_inner_steps is not None:
         if config.get("wonn_num_inner_steps") != expected_inner_steps:
             raise ValueError(
-                f"{config_path} is not the declared {label} architecture"
+                f"{resolved_config_path} is not the declared {label} architecture"
             )
     for field in (
         "data_revision", "eval_data_revision", "encoder_revision",
         "tokenizer_revision",
     ):
         if not config.get(field):
-            raise ValueError(f"{config_path} does not pin {field}")
+            raise ValueError(f"{resolved_config_path} does not pin {field}")
     return config
 
 
@@ -216,40 +226,46 @@ def _load_run(
     verify_checkpoints: bool,
 ) -> dict:
     target_step = stage["target_step"]
-    completion_path = run_dir / "training_complete.json"
-    if not completion_path.is_file():
-        raise FileNotFoundError(f"missing {completion_path}")
-    completion = _read_json(completion_path)
+    resolved_completion_path = completion_path(run_dir, target_step)
+    if not resolved_completion_path.is_file():
+        raise FileNotFoundError(f"missing {resolved_completion_path}")
+    completion = _read_json(resolved_completion_path)
     if (
         completion.get("status") != "complete"
         or completion.get("completed_optimizer_step") != target_step
     ):
-        raise ValueError(f"{completion_path} is not a complete {target_step}-step run")
+        raise ValueError(
+            f"{resolved_completion_path} is not a complete {target_step}-step run"
+        )
     if completion.get("model") != spec["config_model"]:
-        raise ValueError(f"{completion_path} records the wrong model factory")
+        raise ValueError(f"{resolved_completion_path} records the wrong model factory")
     expected_samples_seen = target_step * 12
     if (
         completion.get("effective_batch_size") != 12
         or completion.get("samples_seen") != expected_samples_seen
     ):
         raise ValueError(
-            f"{completion_path} does not use the paired batch/sample budget"
+            f"{resolved_completion_path} does not use the paired batch/sample budget"
         )
-    config = _validate_resolved_config(run_dir, label, spec)
+    config = _validate_resolved_config(run_dir, label, spec, target_step)
 
     checkpoint_audits = []
-    for step in stage["checkpoint_steps"]:
-        checkpoint = run_dir / f"checkpoint_{step}"
+    for step in retained_checkpoint_steps(run_dir, stage["checkpoint_steps"]):
+        checkpoint = checkpoint_path(run_dir, step)
         if not checkpoint.is_file() or checkpoint.stat().st_size == 0:
             raise FileNotFoundError(f"missing or empty {checkpoint}")
         if verify_checkpoints:
             checkpoint_audits.append(_audit_checkpoint(checkpoint, step))
 
-    metric_rows = _read_jsonl(run_dir / "train_metrics.jsonl")
+    metric_rows = [
+        row
+        for path in training_metric_paths(run_dir, target_step)
+        for row in _read_jsonl(path)
+    ]
     steps = [row.get("optimizer_step") for row in metric_rows]
     if steps != sorted(set(steps)) or not steps or steps[-1] != target_step:
         raise ValueError(
-            f"{run_dir}/train_metrics.jsonl is not unique, ordered, and complete"
+            f"training metrics under {run_dir} are not unique, ordered, and complete"
         )
     required_training = (
         "loss", "l2_loss", "ce_loss", "lr", "samples_seen",
@@ -259,7 +275,7 @@ def _load_run(
         any(not _finite(row.get(field)) for field in required_training)
         for row in metric_rows
     ):
-        raise ValueError(f"{run_dir}/train_metrics.jsonl has incomplete metrics")
+        raise ValueError(f"training metrics under {run_dir} have incomplete metrics")
 
     post_warmup = [
         row for row in metric_rows if row["optimizer_step"] >= 5000
@@ -435,13 +451,15 @@ def analyze(
             "secondary_metrics": [
                 "chrF++", "TER", "empty rate", "length ratio",
             ],
-            "reused_legacy_elf_baseline": elf_run_dir is not None,
+            "reused_consolidated_elf_baseline": elf_run_dir is not None,
             "run_directories": {
                 label: str(path.resolve())
                 for label, path in run_directories.items()
             },
             "run_source_commits": {
-                label: (path / "source_commit").read_text(encoding="utf-8").strip()
+                label: source_commit_path(path, terminal_step).read_text(
+                    encoding="utf-8"
+                ).strip()
                 for label, path in run_directories.items()
             },
         },
@@ -543,7 +561,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--root", type=Path,
-        default=Path("outputs/phase5/redesign_v2/formal50k"),
+        default=Path("outputs/phase5/wonn_runs/l6t3_seed42_b12/formal_0_50k"),
     )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(

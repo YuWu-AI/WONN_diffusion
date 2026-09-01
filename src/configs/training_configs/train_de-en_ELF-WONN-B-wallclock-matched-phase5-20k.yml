@@ -55,7 +55,7 @@ save_optimizer_steps: "20000"
 save_freq: 100
 eval_freq: 100
 
-output_dir: "outputs/phase5/redesign_v2/continuation20k/wonn_l6t8"
+output_dir: "outputs/phase5/wonn_runs/l6t8_wallclock_seed42/continuation_10_20k"
 hf_repo_id: null
 resume: null
 use_wandb: false

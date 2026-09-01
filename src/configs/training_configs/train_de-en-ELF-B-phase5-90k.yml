@@ -56,7 +56,7 @@ save_freq: 100
 eval_freq: 100
 final_eval: false
 
-output_dir: "outputs/phase5/curve_to_plateau_v1/elf_b_seed42_b12"
+output_dir: "outputs/phase5/elf_runs/b12_seed42/curve_50_90k"
 hf_repo_id: null
 resume: null
 init_from: null

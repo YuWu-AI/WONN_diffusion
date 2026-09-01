@@ -70,7 +70,7 @@ save_freq: 100
 eval_freq: 100
 final_eval: false
 
-output_dir: "outputs/phase5/redesign_v2/mechanism50k/s_token_contrast"
+output_dir: "outputs/phase5/wonn_runs/mechanism_0_50k/s_token_contrast"
 hf_repo_id: null
 resume: null
 init_from: null

@@ -6,7 +6,7 @@ common_git_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-com
 main_checkout="$(dirname "$common_git_dir")"
 python_bin="${DLM_WONN_PYTHON:-$main_checkout/.venv/bin/python}"
 pipeline_checks=("$python_bin" scripts/phase5_pipeline_checks.py)
-run_root="outputs/phase5/redesign_v2/mechanism50k"
+run_root="outputs/phase5/wonn_runs/mechanism_0_50k"
 data_root="data/phase5_mechanism"
 config_root="src/configs/training_configs/phase5_mechanism"
 checkpoint_steps=(5000 10000 20000 30000 40000 50000)

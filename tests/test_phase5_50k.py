@@ -12,6 +12,15 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import analyze_phase5_50k
 from analyze_phase5_50k import _evaluate_gate, _metric_bundle, _paired_bootstrap
+from phase5_artifacts import (
+    checkpoint_path,
+    completion_path,
+    config_path,
+    retained_checkpoint_steps,
+    source_commit_path,
+    terminal_status_path,
+    training_metric_paths,
+)
 from evaluate_phase5_wonn_gate import (
     STAGES as WONN_GATE_STAGES,
     _evaluate_gate as _evaluate_wonn_gate,
@@ -57,8 +66,15 @@ class Phase550KConfigTest(unittest.TestCase):
         self.assertIsNone(wonn.resume)
         self.assertIsNone(elf.init_from)
         self.assertIsNone(wonn.init_from)
-        self.assertIn("redesign_v2/formal50k", elf.output_dir)
-        self.assertIn("redesign_v2/formal50k", wonn.output_dir)
+        self.assertEqual(
+            elf.output_dir,
+            "outputs/phase5/elf_runs/b12_seed42/formal_0_50k",
+        )
+        self.assertEqual(
+            wonn.output_dir,
+            "outputs/phase5/wonn_runs/l6t3_seed42_b12/formal_0_50k/"
+            "wonn_l6t3_seed42_b12",
+        )
         self.assertTrue(elf.data_revision)
         self.assertTrue(elf.eval_data_revision)
         self.assertTrue(elf.encoder_revision)
@@ -295,9 +311,51 @@ class Phase550KAnalysisTest(unittest.TestCase):
         self.assertLess(pilot_position, gate_position)
         self.assertLess(gate_position, continuation_position)
         self.assertNotIn('run_training "ELF-B"', pipeline)
-        self.assertIn('--elf-run-dir "$legacy_elf_dir"', pipeline)
+        self.assertIn('--elf-run-dir "$elf_baseline"', pipeline)
+        self.assertIn("outputs/phase5/elf_b_seed42_b12_0_90k", pipeline)
         self.assertIn("observed_failed_continuing", pipeline)
         self.assertNotIn("exit 20", pipeline)
+
+
+class Phase5ArtifactPathTest(unittest.TestCase):
+    def test_consolidated_elf_layout_resolves_without_native_run_aliases(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            for directory in ("checkpoints", "training", "provenance"):
+                (run_dir / directory).mkdir()
+            self.assertEqual(
+                checkpoint_path(run_dir, 50000),
+                run_dir / "checkpoints/checkpoint_50000",
+            )
+            self.assertEqual(
+                retained_checkpoint_steps(
+                    run_dir, (5000, 10000, 15000, 20000),
+                ),
+                [10000, 20000],
+            )
+            self.assertEqual(
+                completion_path(run_dir, 50000),
+                run_dir / "provenance/training_complete_50000.json",
+            )
+            self.assertEqual(
+                config_path(run_dir, 90000),
+                run_dir / "provenance/config_50000_90000.yml",
+            )
+            self.assertEqual(
+                source_commit_path(run_dir, 50000),
+                run_dir / "provenance/source_commit_00000_50000.txt",
+            )
+            self.assertEqual(
+                terminal_status_path(run_dir, 90000),
+                run_dir / "provenance/terminal_status_90000.json",
+            )
+            self.assertEqual(
+                training_metric_paths(run_dir, 90000),
+                [
+                    run_dir / "training/train_metrics_00000_50000.jsonl",
+                    run_dir / "training/train_metrics_50000_90000.jsonl",
+                ],
+            )
 
 
 if __name__ == "__main__":

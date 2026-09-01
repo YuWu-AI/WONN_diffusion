@@ -61,7 +61,7 @@ save_freq: 100
 eval_freq: 100
 final_eval: false
 
-output_dir: "outputs/phase5/redesign_v2/formal50k/wonn_l6t3_seed42_b12"
+output_dir: "outputs/phase5/wonn_runs/l6t3_seed42_b12/formal_0_50k/wonn_l6t3_seed42_b12"
 hf_repo_id: null
 resume: null
 init_from: null

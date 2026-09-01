@@ -834,7 +834,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--root", type=Path,
-        default=Path("outputs/phase5/redesign_v2/formal50k"),
+        default=Path("outputs/phase5/wonn_runs/l6t3_seed42_b12/formal_0_50k"),
         help="Phase 5 formal run root.",
     )
     parser.add_argument("--output-dir", type=Path, required=True)

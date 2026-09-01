@@ -82,14 +82,25 @@ class Phase5CurveConfigTest(unittest.TestCase):
         self.assertIsNone(elf.resume)
         self.assertIsNone(wonn.resume)
         self.assertNotEqual(elf.output_dir, wonn.output_dir)
+        self.assertEqual(
+            elf.output_dir,
+            "outputs/phase5/elf_runs/b12_seed42/curve_50_90k",
+        )
+        self.assertEqual(
+            wonn.output_dir,
+            "outputs/phase5/wonn_runs/l6t3_seed42_b12/curve_50_130k/"
+            "wonn_l6t3_seed42_b12",
+        )
 
     def test_pipeline_retains_source_diagnostics_and_terminal_full_eval(self):
         pipeline = (REPO_ROOT / "scripts/run_phase5_curve_extension_pipeline.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn('train_to_plateau "Transformer ELF-B"', pipeline)
-        self.assertIn('"$elf_base" 90000', pipeline)
+        self.assertNotIn('train_to_plateau "Transformer ELF-B"', pipeline)
+        self.assertIn("outputs/phase5/elf_b_seed42_b12_0_90k", pipeline)
         self.assertIn('"$wonn_base" 130000', pipeline)
+        self.assertIn('--elf-extension "$elf_baseline"', pipeline)
+        self.assertIn('--wonn-extension "$wonn_dir"', pipeline)
         self.assertIn('step % 20000', pipeline)
         self.assertIn('evaluate_checkpoint "$label" "$config_path" "$output_dir" "$terminal_step" 3000', pipeline)
         self.assertIn('--bootstrap-resamples 1000', pipeline)

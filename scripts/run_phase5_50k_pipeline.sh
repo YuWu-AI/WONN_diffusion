@@ -5,10 +5,8 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
 common_git_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)"
 main_checkout="$(dirname "$common_git_dir")"
 python_bin="${DLM_WONN_PYTHON:-$main_checkout/.venv/bin/python}"
-run_root="outputs/phase5/redesign_v2/formal50k"
-legacy_root="${DLM_WONN_LEGACY_ROOT:-outputs/phase5/formal50k}"
-legacy_elf_dir="$legacy_root/elf_b_seed42_b12"
-elf_config="src/configs/training_configs/train_de-en_ELF-B-phase5-50k.yml"
+run_root="outputs/phase5/wonn_runs/l6t3_seed42_b12/formal_0_50k"
+elf_baseline="${DLM_WONN_ELF_BASELINE:-outputs/phase5/elf_b_seed42_b12_0_90k}"
 wonn_config="src/configs/training_configs/train_de-en-WONN-L6T3-phase5-50k.yml"
 wonn_dir="$run_root/wonn_l6t3_seed42_b12"
 evaluation_steps=(10000 20000 30000 40000 50000)
@@ -28,18 +26,20 @@ if [ ! -x "$python_bin" ]; then
     echo "missing Python environment: $python_bin" >&2
     exit 4
 fi
-if [ ! -f "$elf_config" ] || [ ! -f "$wonn_config" ]; then
+if [ ! -f "$wonn_config" ]; then
     echo "missing formal 50K training configuration" >&2
     exit 5
 fi
 for required in \
-    "$legacy_root/experiment_manifest.json" \
-    "$legacy_root/pipeline_complete.json" \
-    "$legacy_elf_dir/training_complete.json" \
-    "$legacy_elf_dir/checkpoint_50000" \
-    "$legacy_elf_dir/evaluations/checkpoint_50000/evaluation_complete.json"; do
+    "$elf_baseline/provenance/experiment_manifest_00000_50000.json" \
+    "$elf_baseline/provenance/training_complete_50000.json" \
+    "$elf_baseline/provenance/config_00000_50000.yml" \
+    "$elf_baseline/provenance/source_commit_00000_50000.txt" \
+    "$elf_baseline/training/train_metrics_00000_50000.jsonl" \
+    "$elf_baseline/checkpoints/checkpoint_50000" \
+    "$elf_baseline/evaluations/checkpoint_50000/evaluation_complete.json"; do
     if [ ! -s "$required" ]; then
-        echo "missing validated legacy ELF artifact: $required" >&2
+        echo "missing consolidated ELF baseline artifact: $required" >&2
         exit 14
     fi
 done
@@ -309,7 +309,7 @@ done
 final_dir="$run_root/analysis/final50k"
 "$python_bin" scripts/analyze_phase5_50k.py \
     --root "$run_root" \
-    --elf-run-dir "$legacy_elf_dir" \
+    --elf-run-dir "$elf_baseline" \
     --output-dir "$final_dir" \
     --stage final50k \
     --verify-checkpoints \
@@ -321,5 +321,5 @@ printf '{\n  "status": "complete",\n  "completed_at": "%s",\n  "source_commit": 
     > "$run_root/pipeline_complete.json"
 
 if command -v notify-send >/dev/null 2>&1; then
-    notify-send "DLM-WONN Phase 5" "WMT14 redesigned WONN 50K vs legacy ELF completed"
+    notify-send "DLM-WONN Phase 5" "WMT14 WONN 50K vs consolidated ELF completed"
 fi

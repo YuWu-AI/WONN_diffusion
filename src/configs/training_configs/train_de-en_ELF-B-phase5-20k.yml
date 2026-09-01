@@ -49,9 +49,9 @@ save_optimizer_steps: "20000"
 save_freq: 100
 eval_freq: 100
 
-output_dir: "outputs/phase5/continuation20k/elf_b"
+output_dir: "outputs/phase5/elf_runs/b4_seed42/continuation_10_20k"
 hf_repo_id: null
-resume: "outputs/phase5/pilot/elf_b/checkpoint_10000"
+resume: "outputs/phase5/elf_runs/b4_seed42/pilot_0_10k/checkpoint_10000"
 use_wandb: false
 seed: 42
 num_workers: 4

@@ -5,12 +5,12 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
 common_git_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)"
 main_checkout="$(dirname "$common_git_dir")"
 python_bin="${DLM_WONN_PYTHON:-$main_checkout/.venv/bin/python}"
-run_root="outputs/phase5/curve_to_plateau_v1"
-elf_base="outputs/phase5/formal50k/elf_b_seed42_b12"
-wonn_base="outputs/phase5/redesign_v2/formal50k/wonn_l6t3_seed42_b12"
+run_root="outputs/phase5/wonn_runs/l6t3_seed42_b12/curve_50_130k"
+elf_baseline="${DLM_WONN_ELF_BASELINE:-outputs/phase5/elf_b_seed42_b12_0_90k}"
+wonn_base_root="outputs/phase5/wonn_runs/l6t3_seed42_b12/formal_0_50k"
+wonn_base="$wonn_base_root/wonn_l6t3_seed42_b12"
 elf_config="src/configs/training_configs/train_de-en-ELF-B-phase5-90k.yml"
 wonn_config="src/configs/training_configs/train_de-en-WONN-L6T3-phase5-130k.yml"
-elf_dir="$run_root/elf_b_seed42_b12"
 wonn_dir="$run_root/wonn_l6t3_seed42_b12"
 status_path="$run_root/pipeline_status.json"
 current_stage="preflight"
@@ -97,11 +97,16 @@ export CPATH="$python_include${CPATH:+:$CPATH}"
 for required in \
     "$elf_config" \
     "$wonn_config" \
-    "outputs/phase5/formal50k/pipeline_complete.json" \
-    "outputs/phase5/redesign_v2/formal50k/pipeline_complete.json" \
-    "$elf_base/training_complete.json" \
-    "$elf_base/checkpoint_50000" \
-    "$elf_base/evaluations/checkpoint_50000/evaluation_complete.json" \
+    "$elf_baseline/provenance/training_complete_90000.json" \
+    "$elf_baseline/provenance/terminal_status_90000.json" \
+    "$elf_baseline/provenance/source_commit_50000_90000.txt" \
+    "$elf_baseline/training/train_metrics_00000_50000.jsonl" \
+    "$elf_baseline/training/train_metrics_50000_90000.jsonl" \
+    "$elf_baseline/checkpoints/checkpoint_50000" \
+    "$elf_baseline/checkpoints/checkpoint_90000" \
+    "$elf_baseline/evaluations/checkpoint_50000/evaluation_complete.json" \
+    "$elf_baseline/evaluations/checkpoint_90000/evaluation_complete.json" \
+    "$wonn_base_root/pipeline_complete.json" \
     "$wonn_base/training_complete.json" \
     "$wonn_base/checkpoint_50000" \
     "$wonn_base/evaluations/checkpoint_50000/evaluation_complete.json"; do
@@ -111,15 +116,22 @@ for required in \
     fi
 done
 
-"$python_bin" - "$elf_base/training_complete.json" "$wonn_base/training_complete.json" <<'PY'
+"$python_bin" - \
+    "$elf_baseline/provenance/training_complete_90000.json" 90000 \
+    "$wonn_base/training_complete.json" 50000 <<'PY'
 import json
 import sys
-for path in sys.argv[1:]:
+for path, expected_step in zip(sys.argv[1::2], sys.argv[2::2]):
     payload = json.load(open(path, encoding="utf-8"))
-    if payload.get("status") != "complete" or payload.get("completed_optimizer_step") != 50000:
-        raise SystemExit(f"parent run is not complete at 50000: {path}")
+    if (
+        payload.get("status") != "complete"
+        or payload.get("completed_optimizer_step") != int(expected_step)
+    ):
+        raise SystemExit(f"run is not complete at {expected_step}: {path}")
 PY
-"$python_bin" -c 'from pathlib import Path; from scripts.summarize_phase5_run import _audit_checkpoint; _audit_checkpoint(Path("outputs/phase5/formal50k/elf_b_seed42_b12/checkpoint_50000"), 50000); _audit_checkpoint(Path("outputs/phase5/redesign_v2/formal50k/wonn_l6t3_seed42_b12/checkpoint_50000"), 50000)' \
+"$python_bin" -c 'import sys; from pathlib import Path; from scripts.summarize_phase5_run import _audit_checkpoint; _audit_checkpoint(Path(sys.argv[1]), 90000); _audit_checkpoint(Path(sys.argv[2]), 50000)' \
+    "$elf_baseline/checkpoints/checkpoint_90000" \
+    "$wonn_base/checkpoint_50000" \
     2>&1 | tee "$run_root/preflight_checkpoint_audit.log"
 
 manifest_path="$run_root/experiment_manifest.json"
@@ -131,7 +143,11 @@ if [ ! -s "$manifest_path" ]; then
         --config "$wonn_config"
 fi
 
-"$python_bin" - "$run_root/continuation_lineage.json" "$experiment_commit" "$elf_base" "$wonn_base" <<'PY'
+"$python_bin" - \
+    "$run_root/continuation_lineage.json" \
+    "$experiment_commit" \
+    "$elf_baseline" \
+    "$wonn_base" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -139,12 +155,16 @@ output, commit, elf, wonn = sys.argv[1:]
 payload = {
     "status": "ready",
     "orchestrator_commit": commit,
-    "parents": {
+    "comparison_baseline": {
         "Transformer ELF-B": {
             "run_dir": elf,
-            "checkpoint": f"{elf}/checkpoint_50000",
-            "source_commit": Path(elf, "source_commit").read_text(encoding="utf-8").strip(),
+            "checkpoint": f"{elf}/checkpoints/checkpoint_90000",
+            "source_commit": Path(
+                elf, "provenance", "source_commit_50000_90000.txt"
+            ).read_text(encoding="utf-8").strip(),
         },
+    },
+    "parents": {
         "WONN-L6T3": {
             "run_dir": wonn,
             "checkpoint": f"{wonn}/checkpoint_50000",
@@ -362,17 +382,18 @@ train_to_plateau() {
     write_terminal_status "$output_dir" "$label" "$terminal_step" "$terminal_reason"
 }
 
-train_to_plateau "Transformer ELF-B" "$elf_config" "$elf_dir" "$elf_base" 90000
 train_to_plateau "WONN-L6T3" "$wonn_config" "$wonn_dir" "$wonn_base" 130000
 
-elf_step="$($python_bin -c 'import json; print(json.load(open("outputs/phase5/curve_to_plateau_v1/elf_b_seed42_b12/terminal_status.json"))["terminal_step"])')"
-wonn_step="$($python_bin -c 'import json; print(json.load(open("outputs/phase5/curve_to_plateau_v1/wonn_l6t3_seed42_b12/terminal_status.json"))["terminal_step"])')"
+elf_step=90000
+wonn_step="$($python_bin -c 'import json,sys; print(json.load(open(sys.argv[1]))["terminal_step"])' "$wonn_dir/terminal_status.json")"
 current_stage="final comparison report"
 write_status running
 "$python_bin" scripts/analyze_phase5_curve_extension.py report \
     --root "$run_root" \
-    --elf-base "$elf_base" \
+    --elf-base "$elf_baseline" \
     --wonn-base "$wonn_base" \
+    --elf-extension "$elf_baseline" \
+    --wonn-extension "$wonn_dir" \
     --elf-step "$elf_step" \
     --wonn-step "$wonn_step" \
     --output-dir "$run_root/analysis/final" \

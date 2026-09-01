@@ -15,6 +15,12 @@ from analyze_phase5_50k import (
     _write_csv,
     _write_json,
 )
+from phase5_artifacts import (
+    checkpoint_path,
+    completion_path,
+    terminal_status_path,
+    training_metric_paths,
+)
 
 
 POLICY = {
@@ -65,12 +71,13 @@ def _aligned_pair(earlier: dict, later: dict, limit: int | None = None) -> tuple
     return truncate(earlier), truncate(later)
 
 
-def _merged_training_rows(base_run_dir: Path, extension_run_dir: Path) -> list[dict]:
+def _merged_training_rows(
+    base_run_dir: Path, extension_run_dir: Path, terminal_step: int,
+) -> list[dict]:
     by_step = {}
-    for path in (
-        base_run_dir / "train_metrics.jsonl",
-        extension_run_dir / "train_metrics.jsonl",
-    ):
+    paths = training_metric_paths(base_run_dir, min(50000, terminal_step))
+    paths += training_metric_paths(extension_run_dir, terminal_step)
+    for path in paths:
         for row in _read_jsonl(path):
             step = row.get("optimizer_step")
             if isinstance(step, int) and not isinstance(step, bool):
@@ -154,7 +161,7 @@ def evaluate_convergence(
     )
     bleu = bootstrap["bleu_delta_wonn_minus_elf"]
     chrf2 = bootstrap["chrf2_delta_wonn_minus_elf"]
-    rows = _merged_training_rows(base_run_dir, extension_run_dir)
+    rows = _merged_training_rows(base_run_dir, extension_run_dir, step)
     loss = _loss_windows(rows, step)
     current_metrics = current_eval["metrics"]
     abnormal_checks = {
@@ -251,12 +258,14 @@ def _diagnostic_rows(extension_run_dir: Path, terminal_step: int) -> list[dict]:
 
 
 def _training_summary(base_run_dir: Path, extension_run_dir: Path, terminal_step: int) -> dict:
-    base = _read_json(base_run_dir / "training_complete.json")
-    extension = _read_json(extension_run_dir / "training_complete.json")
+    base = _read_json(completion_path(base_run_dir, min(50000, terminal_step)))
+    extension = _read_json(completion_path(extension_run_dir, terminal_step))
     if extension.get("completed_optimizer_step") != terminal_step:
         raise ValueError(f"{extension_run_dir} did not complete terminal step {terminal_step}")
     rows = [
-        row for row in _merged_training_rows(base_run_dir, extension_run_dir)
+        row for row in _merged_training_rows(
+            base_run_dir, extension_run_dir, terminal_step,
+        )
         if row["optimizer_step"] <= terminal_step
     ]
     if not rows or rows[-1]["optimizer_step"] != terminal_step:
@@ -292,16 +301,18 @@ def build_report(
     wonn_step: int,
     output_dir: Path,
     bootstrap_resamples: int,
+    elf_extension: Path | None = None,
+    wonn_extension: Path | None = None,
 ) -> dict:
     specs = {
         "Transformer ELF-B": {
             "base": elf_base,
-            "extension": root / "elf_b_seed42_b12",
+            "extension": elf_extension or root / "elf_b_seed42_b12",
             "terminal_step": elf_step,
         },
         "WONN-L6T3": {
             "base": wonn_base,
-            "extension": root / "wonn_l6t3_seed42_b12",
+            "extension": wonn_extension or root / "wonn_l6t3_seed42_b12",
             "terminal_step": wonn_step,
         },
     }
@@ -335,7 +346,10 @@ def build_report(
             "step": best_step,
             "bleu": evaluations[label][best_step]["metrics"]["bleu"],
             "chrf2": evaluations[label][best_step]["metrics"]["chrf2"],
-            "checkpoint": str((spec["extension"] if best_step > 50000 else spec["base"]) / f"checkpoint_{best_step}"),
+            "checkpoint": str(checkpoint_path(
+                spec["extension"] if best_step > 50000 else spec["base"],
+                best_step,
+            )),
         }
 
     common_steps = sorted(set(evaluations["Transformer ELF-B"]) & set(evaluations["WONN-L6T3"]))
@@ -363,7 +377,9 @@ def build_report(
         for label, spec in specs.items()
     }
     terminal_status = {
-        label: _read_json(spec["extension"] / "terminal_status.json")
+        label: _read_json(terminal_status_path(
+            spec["extension"], spec["terminal_step"],
+        ))
         for label, spec in specs.items()
     }
     source_diagnostics = _diagnostic_rows(specs["WONN-L6T3"]["extension"], wonn_step)
@@ -484,6 +500,8 @@ def main() -> None:
     report.add_argument("--root", type=Path, required=True)
     report.add_argument("--elf-base", type=Path, required=True)
     report.add_argument("--wonn-base", type=Path, required=True)
+    report.add_argument("--elf-extension", type=Path)
+    report.add_argument("--wonn-extension", type=Path)
     report.add_argument("--elf-step", type=int, required=True)
     report.add_argument("--wonn-step", type=int, required=True)
     report.add_argument("--output-dir", type=Path, required=True)
@@ -517,6 +535,8 @@ def main() -> None:
         args.wonn_step,
         args.output_dir,
         args.bootstrap_resamples,
+        args.elf_extension,
+        args.wonn_extension,
     )
     print(json.dumps({
         "status": payload["status"],

@@ -286,30 +286,30 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--diagnostics-root", type=Path,
-        default=Path("outputs/phase5/redesign_v2/formal50k/analysis/diagnostics_v1"),
+        default=Path("outputs/phase5/wonn_runs/l6t3_seed42_b12/formal_0_50k/analysis/diagnostics_v1"),
     )
     parser.add_argument(
         "--sampler-sweep-root", type=Path,
         default=Path(
-            "outputs/phase5/redesign_v2/formal50k/analysis/sampler_sweep_wonn_128"
+            "outputs/phase5/wonn_runs/l6t3_seed42_b12/formal_0_50k/analysis/sampler_sweep_wonn_128"
         ),
     )
     parser.add_argument(
         "--sampler-confirm-root", type=Path,
         default=Path(
-            "outputs/phase5/redesign_v2/formal50k/analysis/sampler_confirm_wonn_1000"
+            "outputs/phase5/wonn_runs/l6t3_seed42_b12/formal_0_50k/analysis/sampler_confirm_wonn_1000"
         ),
     )
     parser.add_argument(
         "--final-comparison", type=Path,
         default=Path(
-            "outputs/phase5/redesign_v2/formal50k/analysis/final50k/comparison.json"
+            "outputs/phase5/wonn_runs/l6t3_seed42_b12/formal_0_50k/analysis/final50k/comparison.json"
         ),
     )
     parser.add_argument(
         "--output-dir", type=Path,
         default=Path(
-            "outputs/phase5/redesign_v2/formal50k/analysis/diagnostic_readout"
+            "outputs/phase5/wonn_runs/l6t3_seed42_b12/formal_0_50k/analysis/diagnostic_readout"
         ),
     )
     parser.add_argument("--bootstrap-resamples", type=int, default=1000)
