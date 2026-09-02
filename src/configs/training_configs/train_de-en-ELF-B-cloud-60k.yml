@@ -32,28 +32,28 @@ label_drop_prob: 0.1
 self_cond_prob: 0.5
 
 epochs: 1
-# Initial global-batch candidate. The pipeline derives per-rank batch from its layout.
-global_batch_size: 48
+# Fixed paired-run batch. With 2-rank DDP this resolves to 12 samples per rank.
+global_batch_size: 24
 batch_size: null
 grad_accum_steps: 1
 max_optimizer_steps: 60000
 blr: 0.001
-lr: null
+lr: 0.0005
 lr_schedule: constant
 weight_decay: 0.0
-warmup_steps: 5000
+warmup_steps: 3000
 optimizer: muon
 compile_train: true
 gradient_checkpointing: false
 ema_decay1: 0.9999
 
 sampling_configs_path: "src/configs/sampling_configs/cond_sampling_configs.yml"
-num_samples: 1000
+num_samples: 500
 online_eval: true
 use_compile: false
 
 log_freq: 100
-save_optimizer_steps: "1000,2000,5000,10000,20000,30000,40000,50000,60000"
+save_optimizer_steps: "5000,10000,20000,40000,60000"
 save_freq: 100
 eval_freq: 100
 final_eval: false

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Validate and summarize the 60K four-GPU ELF/WONN cloud pair."""
+"""Validate and summarize the 50K/60K four-GPU ELF/WONN cloud pair."""
 
 import argparse
 import csv
@@ -13,8 +13,12 @@ import numpy as np
 import sacrebleu
 import yaml
 
-EXPECTED_STEPS = (1000, 2000, 5000, 10000, 20000, 30000, 40000, 50000, 60000)
-EXPECTED_SAMPLES = 1000
+CHECKPOINT_STEPS = {
+    50000: (5000, 10000, 20000, 40000, 50000),
+    60000: (5000, 10000, 20000, 40000, 60000),
+}
+EXPECTED_STEPS = CHECKPOINT_STEPS[60000]
+EXPECTED_SAMPLES = 500
 ELF_LABEL = "Transformer ELF-B"
 WONN_LABEL = "WONN-L12K768T3"
 
@@ -158,12 +162,16 @@ def validate_pair_configs(
     wonn_config_path: Path,
     effective_batch: int | None = None,
     world_size: int = 2,
+    target_steps: int = 60000,
 ) -> dict:
-    if world_size not in (2, 4):
-        raise ValueError("cloud pair world_size must be 2 or 4")
+    if world_size != 2:
+        raise ValueError("cloud pair world_size must be 2")
+    if target_steps not in CHECKPOINT_STEPS:
+        raise ValueError("target steps must be 50000 or 60000")
     elf = _load_yaml(elf_config_path)
     wonn = _load_yaml(wonn_config_path)
-    expected_save_steps = ",".join(str(step) for step in EXPECTED_STEPS)
+    default_save_steps = ",".join(str(step) for step in CHECKPOINT_STEPS[60000])
+    selected_steps = CHECKPOINT_STEPS[target_steps]
 
     for label, config, expected_model in (
         (ELF_LABEL, elf, "ELF-B"),
@@ -173,12 +181,20 @@ def validate_pair_configs(
             raise ValueError(f"{label} config has model={config.get('model')!r}")
         if config.get("max_optimizer_steps") != 60000:
             raise ValueError(f"{label} must train to exactly 60000 optimizer steps")
-        if config.get("save_optimizer_steps") != expected_save_steps:
-            raise ValueError(f"{label} has the wrong checkpoint schedule")
+        if config.get("save_optimizer_steps") != default_save_steps:
+            raise ValueError(f"{label} has the wrong default checkpoint schedule")
         if config.get("grad_accum_steps") != 1:
             raise ValueError(f"{label} must use grad_accum_steps=1")
-        if config.get("lr") is not None or config.get("blr") != 0.001:
-            raise ValueError(f"{label} must derive LR from blr=0.001")
+        if config.get("global_batch_size") != 24:
+            raise ValueError(f"{label} must default to global_batch_size=24")
+        if config.get("lr") != 0.0005:
+            raise ValueError(f"{label} must use lr=0.0005")
+        if config.get("lr_schedule") != "constant":
+            raise ValueError(f"{label} must use a constant LR schedule")
+        if config.get("warmup_steps") != 3000:
+            raise ValueError(f"{label} must use 3000 warmup steps")
+        if config.get("num_samples") != 500:
+            raise ValueError(f"{label} must default to 500 evaluation samples")
         if config.get("resume") is not None or config.get("init_from") is not None:
             raise ValueError(f"{label} must start from random initialization")
         if config.get("seed") != 42:
@@ -228,21 +244,28 @@ def validate_pair_configs(
 
     return {
         "status": "valid",
-        "terminal_optimizer_step": 60000,
-        "checkpoint_steps": list(EXPECTED_STEPS),
+        "terminal_optimizer_step": target_steps,
+        "checkpoint_steps": list(selected_steps),
         "world_size_per_model": world_size,
         "effective_batch_size": effective_batch,
         "batch_size_per_device": effective_batch // world_size,
         "grad_accum_steps": 1,
-        "blr": 0.001,
-        "derived_learning_rate": 0.001 * effective_batch / 256,
+        "learning_rate": 0.0005,
+        "warmup_steps": 3000,
         "seed": 42,
+        "data_revision": elf["data_revision"],
+        "eval_data_revision": elf["eval_data_revision"],
+        "encoder_revision": elf["encoder_revision"],
+        "tokenizer_revision": elf["tokenizer_revision"],
+        "optimizer": elf["optimizer"],
     }
 
 
-def _training_rows(run_dir: Path) -> dict[int, dict]:
+def _training_rows(run_dir: Path, checkpoint_steps: tuple[int, ...]) -> dict[int, dict]:
     rows = {}
     path = run_dir / "train_metrics.jsonl"
+    previous_step = -1
+    previous_samples = -1
     with path.open("r", encoding="utf-8") as source:
         for line_number, line in enumerate(source, 1):
             try:
@@ -250,9 +273,20 @@ def _training_rows(run_dir: Path) -> dict[int, dict]:
             except json.JSONDecodeError as exc:
                 raise ValueError(f"invalid JSON at {path}:{line_number}") from exc
             step = row.get("optimizer_step")
-            if isinstance(step, int) and not isinstance(step, bool):
-                rows[step] = row
-    missing = [step for step in EXPECTED_STEPS if step not in rows]
+            samples_seen = row.get("samples_seen")
+            if (
+                not isinstance(step, int) or isinstance(step, bool)
+                or not isinstance(samples_seen, int) or isinstance(samples_seen, bool)
+            ):
+                raise ValueError(f"{path}:{line_number} lacks integer step/samples_seen")
+            if step <= previous_step or samples_seen <= previous_samples:
+                raise ValueError(f"{path} is not strictly monotonic at line {line_number}")
+            if step in rows:
+                raise ValueError(f"{path} repeats optimizer step {step}")
+            rows[step] = row
+            previous_step = step
+            previous_samples = samples_seen
+    missing = [step for step in checkpoint_steps if step not in rows]
     if missing:
         raise ValueError(f"{path} lacks checkpoint-step metrics: {missing}")
     return rows
@@ -315,7 +349,7 @@ def _panel_svg(title: str, x_label: str, series: list, x: int, y: int) -> str:
     return "".join(parts)
 
 
-def _quality_chart(rows: list[dict]) -> str:
+def _quality_chart(rows: list[dict], target_steps: int) -> str:
     by_model = {
         label: [row for row in rows if row["model"] == label]
         for label in (ELF_LABEL, WONN_LABEL)
@@ -341,7 +375,7 @@ def _quality_chart(rows: list[dict]) -> str:
         '<svg xmlns="http://www.w3.org/2000/svg" width="1020" height="700" '
         'viewBox="0 0 1020 700"><rect width="100%" height="100%" fill="white"/>'
         '<text x="510" y="28" text-anchor="middle" font-size="20" font-weight="700">'
-        'WMT14 cloud pair quality curves (60K)</text>'
+        f'WMT14 cloud pair quality curves ({target_steps // 1000}K)</text>'
         '<line x1="345" y1="51" x2="375" y2="51" stroke="#2563eb" stroke-width="3"/>'
         f'<text x="382" y="55" font-size="12">{ELF_LABEL}</text>'
         '<line x1="555" y1="51" x2="585" y2="51" stroke="#dc2626" stroke-width="3"/>'
@@ -363,18 +397,33 @@ def analyze_pair(
     )
     completions = {}
     configs = {}
-    training = {}
     for label, run_dir, model in run_specs:
         completion = _read_json(run_dir / "training_complete.json")
-        if completion.get("status") != "complete" or completion.get(
-            "completed_optimizer_step"
-        ) != 60000:
-            raise ValueError(f"{label} training is not complete at 60000")
+        if completion.get("status") != "complete":
+            raise ValueError(f"{label} training is not complete")
         if completion.get("model") != model:
             raise ValueError(f"{label} completion marker has the wrong model")
         completions[label] = completion
         configs[label] = _load_yaml(run_dir / "config.yml")
-        training[label] = _training_rows(run_dir)
+
+    targets = {config.get("max_optimizer_steps") for config in configs.values()}
+    if len(targets) != 1 or next(iter(targets)) not in CHECKPOINT_STEPS:
+        raise ValueError("resolved configs must share a 50000 or 60000 target")
+    target_steps = targets.pop()
+    checkpoint_steps = CHECKPOINT_STEPS[target_steps]
+    expected_save_steps = ",".join(str(step) for step in checkpoint_steps)
+    if any(
+        config.get("save_optimizer_steps") != expected_save_steps
+        for config in configs.values()
+    ):
+        raise ValueError("resolved configs have the wrong checkpoint schedule")
+    training = {
+        label: _training_rows(run_dir, checkpoint_steps)
+        for label, run_dir, _ in run_specs
+    }
+    for label in (ELF_LABEL, WONN_LABEL):
+        if completions[label].get("completed_optimizer_step") != target_steps:
+            raise ValueError(f"{label} training is not complete at {target_steps}")
 
     effective_batches = {
         completion.get("effective_batch_size") for completion in completions.values()
@@ -384,6 +433,8 @@ def analyze_pair(
     effective_batch = effective_batches.pop()
     if not isinstance(effective_batch, int) or effective_batch <= 0:
         raise ValueError("completion markers lack a valid effective batch size")
+    if effective_batch != 24:
+        raise ValueError("paired run must use effective batch 24")
 
     fairness_fields = (
         "global_batch_size", "batch_size", "grad_accum_steps", "lr", "blr", "lr_schedule",
@@ -400,6 +451,22 @@ def analyze_pair(
     }
     if mismatches:
         raise ValueError(f"resolved paired config mismatch: {mismatches}")
+    fixed_contract = {
+        "grad_accum_steps": 1,
+        "lr": 0.0005,
+        "lr_schedule": "constant",
+        "warmup_steps": 3000,
+        "seed": 42,
+        "num_samples": 500,
+    }
+    for label in (ELF_LABEL, WONN_LABEL):
+        wrong = {
+            field: {"actual": configs[label].get(field), "expected": expected}
+            for field, expected in fixed_contract.items()
+            if configs[label].get(field) != expected
+        }
+        if wrong:
+            raise ValueError(f"{label} violates the fixed paired contract: {wrong}")
     if configs[ELF_LABEL].get("global_batch_size") != effective_batch:
         raise ValueError("resolved config and completion effective batch disagree")
     if (
@@ -412,21 +479,21 @@ def analyze_pair(
     for label in (ELF_LABEL, WONN_LABEL):
         if configs[label].get("resume") is not None or configs[label].get("init_from") is not None:
             raise ValueError(f"{label} resolved config is not from scratch")
-        if completions[label].get("samples_seen") != 60000 * effective_batch:
+        if completions[label].get("samples_seen") != target_steps * effective_batch:
             raise ValueError(f"{label} completion marker has the wrong samples_seen")
         if completions[label].get("batch_size_per_device") != configs[label].get("batch_size"):
             raise ValueError(f"{label} completion marker has the wrong per-device batch")
         if completions[label].get("learning_rate") != configs[label].get("lr"):
             raise ValueError(f"{label} completion marker has the wrong learning rate")
-        if completions[label].get("world_size") not in (2, 4):
-            raise ValueError(f"{label} completion marker has an unsupported world size")
+        if completions[label].get("world_size") != 2:
+            raise ValueError(f"{label} completion marker must use world size 2")
     if completions[ELF_LABEL]["world_size"] != completions[WONN_LABEL]["world_size"]:
         raise ValueError("ELF and WONN world sizes differ")
 
     rows = []
     paired_inputs = {}
     for label, run_dir, _ in run_specs:
-        for step in EXPECTED_STEPS:
+        for step in checkpoint_steps:
             checkpoint = run_dir / f"checkpoint_{step}"
             if not checkpoint.is_file() or checkpoint.stat().st_size == 0:
                 raise FileNotFoundError(f"missing or empty checkpoint {checkpoint}")
@@ -487,13 +554,13 @@ def analyze_pair(
         writer.writeheader()
         writer.writerows(rows)
     (output_dir / "quality_curves.svg").write_text(
-        _quality_chart(rows), encoding="utf-8",
+        _quality_chart(rows, target_steps), encoding="utf-8",
     )
 
     terminal = {
         label: next(
             row for row in rows
-            if row["model"] == label and row["optimizer_step"] == 60000
+            if row["model"] == label and row["optimizer_step"] == target_steps
         )
         for label in (ELF_LABEL, WONN_LABEL)
     }
@@ -501,8 +568,8 @@ def analyze_pair(
         "status": "complete",
         "completed_at_utc": datetime.now(timezone.utc).isoformat(),
         "comparison_contract": {
-            "terminal_optimizer_step": 60000,
-            "checkpoint_steps": list(EXPECTED_STEPS),
+            "terminal_optimizer_step": target_steps,
+            "checkpoint_steps": list(checkpoint_steps),
             "samples_per_model_per_checkpoint": expected_samples,
             "effective_batch_size": effective_batch,
             "seed": configs[ELF_LABEL]["seed"],
@@ -536,8 +603,8 @@ def analyze_pair(
     }
     _write_json(output_dir / "comparison.json", payload)
     markdown = [
-        "# WMT14 60K cloud pair\n\n",
-        f"Both models use effective batch {effective_batch}, seed 42, and the same nine checkpoints.\n\n",
+        f"# WMT14 {target_steps // 1000}K cloud pair\n\n",
+        f"Both models use effective batch {effective_batch}, seed 42, and the same five checkpoints.\n\n",
         "| Model | BLEU | chrF++ | TER | Empty % | Unique % | Length ratio |\n",
         "|---|---:|---:|---:|---:|---:|---:|\n",
     ]
@@ -561,6 +628,7 @@ def main() -> None:
     validate.add_argument("--wonn-config", type=Path, required=True)
     validate.add_argument("--effective-batch", type=int)
     validate.add_argument("--world-size", type=int, required=True)
+    validate.add_argument("--target-steps", type=int, default=60000)
     validate.add_argument("--output", type=Path)
     analyze = subparsers.add_parser("analyze")
     analyze.add_argument("--elf-run-dir", type=Path, required=True)
@@ -572,6 +640,7 @@ def main() -> None:
     if args.command == "validate-configs":
         payload = validate_pair_configs(
             args.elf_config, args.wonn_config, args.effective_batch, args.world_size,
+            args.target_steps,
         )
         if args.output:
             _write_json(args.output, payload)

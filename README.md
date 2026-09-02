@@ -6,8 +6,9 @@ DLM-WONN 研究能否用 Winfree Oscillatory Neural Network（WONN）替换
 decoder 不变。
 
 当前唯一执行主线是 Phase 1 的 WMT14 云端工程闭环：在一台 4-GPU 主机上，从同一 clean commit
-分别训练 ELF-B 和 WONN-L12/K768/T3 到 60K optimizer steps，再对 9 个 checkpoint 做统一评测并
-生成一张复合折线图。历史 50K/90K/130K 实验只作为产物和 Git 历史证据，不是当前启动入口。
+以 2+2 DDP 并发训练 ELF-B 和 WONN-L12/K768/T3：默认 60K optimizer steps，若端到端预测超过
+4.5 小时则回退到 50K；两边统一评测 5 个 checkpoint 并生成复合折线图。历史实验只作为产物和
+Git 历史证据，不是当前启动入口。
 
 ## 快速导航
 
@@ -16,7 +17,7 @@ decoder 不变。
 | [`docs/README.md`](docs/README.md) | 文档状态与阅读顺序 |
 | [`PROJECT_HANDOFF.md`](PROJECT_HANDOFF.md) | 已确认的架构边界和技术基线 |
 | [`docs/RESEARCH_PLAN.md`](docs/RESEARCH_PLAN.md) | Phase 1–3 研究顺序与验收标准 |
-| [`docs/CLOUD_PHASE1_RUNBOOK.md`](docs/CLOUD_PHASE1_RUNBOOK.md) | 4-GPU、60K 云端运行手册 |
+| [`docs/CLOUD_PHASE1_RUNBOOK.md`](docs/CLOUD_PHASE1_RUNBOOK.md) | 4-GPU、50K/60K 云端运行手册 |
 | [`docs/PROJECT_STRUCTURE.md`](docs/PROJECT_STRUCTURE.md) | 代码、脚本、配置和产物索引 |
 
 ## 目录
@@ -60,14 +61,16 @@ uv pip sync --python .venv/bin/python requirements-lock.txt
 
 ```bash
 export DLM_WONN_PYTHON=/opt/dlm-wonn-venv/bin/python
-export DLM_WONN_PAIR_RUN_ROOT=/persistent/dlm-wonn/runs/wmt14-pair-20260902-a
+export DLM_WONN_TARGET_STEPS=60000
+commit_short="$(git rev-parse --short=7 HEAD)"
+export DLM_WONN_PAIR_RUN_ROOT="/root/shared-nvme/dlm-wonn/runs/wmt14-pair-${commit_short}-60000"
 export DLM_WONN_GPU_LAYOUT=2+2
-export DLM_WONN_GLOBAL_BATCH_SIZE=48
+export DLM_WONN_GLOBAL_BATCH_SIZE=24
+export DLM_WONN_EVAL_SAMPLES=500
 bash scripts/run_cloud_pair_pipeline.sh
 ```
 
-`48` 只是待云端 profile 复核的初始候选，不应在未测显存和吞吐时视为最终 batch。完整 gate、
-`4-serial` 备选布局、恢复约束和产物定义见云端运行手册。
+固定参数、唯一 2+2 smoke、预算决策、恢复约束和产物定义见云端运行手册。
 
 ## 不变量
 

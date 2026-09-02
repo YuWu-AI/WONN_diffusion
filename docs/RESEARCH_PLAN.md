@@ -1,6 +1,6 @@
 # ELF-WONN 新阶段研究计划
 
-> 计划重置日期：2026-08-11；代码状态更新：2026-09-02
+> 计划重置日期：2026-08-11；代码状态更新：2026-09-03
 > Phase 1–4 的基础实现与验收已经完成，统一沉淀在
 > [`PROJECT_HANDOFF.md`](../PROJECT_HANDOFF.md)。本文从新的 Phase 1 重新编号。
 
@@ -31,8 +31,8 @@ WMT14 翻译不再承担主要研究结论。新 Phase 1 只用它验证代码�
 - 单机单卡与单机多卡 `torchrun` 启动入口；
 - 新 WONN 文本交互：逐振子 S/I MLP、完整 QKV/O、默认 SDPA，以及独立
   `OmegaTransition`；旧 QK dimension/coupling mode/warm-start 入口已移除；
-- 4-GPU 云端配对入口：默认按 2+2 并发训练，也支持 4 卡串行；两边从头训练到 60K，对 9 个
-  checkpoint 完成 18 次评测并生成一张复合质量曲线；
+- 4-GPU 云端配对入口：固定 2+2 并发、global batch 24、lr `5e-4`、warmup 3000；默认从头
+  训练到 60K，若 4.5 小时端到端预测超限则回退到 50K；对 5 个 checkpoint 完成 10 次评测；
 - 相对项目路径和 `DLM_WONN_PYTHON` 等环境变量覆盖；正式流水线
   只要求 clean checkout，不再依赖特定 worktree。
 
@@ -41,7 +41,7 @@ WMT14 翻译不再承担主要研究结论。新 Phase 1 只用它验证代码�
 `HF_HUB_OFFLINE=0 HF_DATASETS_OFFLINE=0`。
 
 当前剩余工程门槛是：把已通过 CPU 回归的改动形成 clean commit，在目标 4-GPU 主机完成 CUDA
-single-batch、故意中断/resume 和多卡 smoke，再启动正式 60K 配对实验。历史本地输出继续保留，
+single-batch、故意中断/resume 和唯一一次 2+2 多卡 smoke，再启动正式 60K 或 50K 配对实验。历史本地输出继续保留，
 但只作为诊断与复现材料。
 
 ## 3. Phase 1：云端工程基线
@@ -66,8 +66,8 @@ single-batch、故意中断/resume 和多卡 smoke，再启动正式 60K 配对�
 1. CPU unit tests。
 2. 单卡 BF16 forward/backward 和单 batch train smoke。
 3. checkpoint save、故意中断、resume、metrics 连续性检查。
-4. 单机多 GPU 100-step smoke，确认无 rank hang。
-5. 云端从随机初始化分别运行 ELF 与 WONN 到 60K，不使用本地 warm-start 结果。
+4. 单机多 GPU 约 100–200 step 的 2+2 并发 smoke，确认无 rank hang 并测量端到端速度。
+5. 按固定公式选择 60K 或 50K，云端从随机初始化并发运行 ELF 与 WONN，不使用 warm start。
 6. 使用同一数据、seed、训练 token/step 预算和采样配置评测。
 7. 独立检查 checkpoint、日志、生成样本和 completion manifest。
 
