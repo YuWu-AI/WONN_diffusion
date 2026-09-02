@@ -21,16 +21,23 @@ from train import (
     _resolve_step_schedule,
     _resume_position,
 )
+from configs.config import resolve_batch_sizes
 from utils.checkpoint_utils import (
     load_checkpoint,
     load_warmstart_checkpoint,
     save_checkpoint,
 )
 from utils.train_utils import TrainState
-from summarize_phase5_run import summarize_run
 
+class TrainingScheduleTest(unittest.TestCase):
+    def test_global_batch_must_divide_world_size(self):
+        self.assertEqual(resolve_batch_sizes(48, None, 2), (24, 48))
+        with self.assertRaisesRegex(ValueError, "must be divisible"):
+            resolve_batch_sizes(49, None, 2)
 
-class Phase5ScheduleTest(unittest.TestCase):
+    def test_per_device_batch_resolves_total_batch(self):
+        self.assertEqual(resolve_batch_sizes(None, 12, 4), (12, 48))
+
     def test_exact_optimizer_budget_and_requested_checkpoints(self):
         optimizer_steps, train_steps, save_steps = _resolve_step_schedule(
             num_train_steps=1000,
@@ -72,7 +79,7 @@ class Phase5ScheduleTest(unittest.TestCase):
         self.assertIsNone(_requested_checkpoint_step(81, 4, requested))
 
 
-class Phase5MetricsTest(unittest.TestCase):
+class TrainingMetricsTest(unittest.TestCase):
     def test_reconcile_keeps_latest_unique_records_through_resume_step(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             metrics_path = Path(tmpdir) / "train_metrics.jsonl"
@@ -110,7 +117,7 @@ class Phase5MetricsTest(unittest.TestCase):
             self.assertEqual(_elapsed_training_offset(str(metrics_path)), 25.0)
 
 
-class Phase5FinalizationTest(unittest.TestCase):
+class TrainingFinalizationTest(unittest.TestCase):
     @mock.patch("train.run_generation")
     @mock.patch("train.save_checkpoint")
     def test_finalization_saves_and_runs_generation(self, save_mock, generation_mock):
@@ -199,7 +206,7 @@ class Phase5FinalizationTest(unittest.TestCase):
         generation_mock.assert_not_called()
 
 
-class Phase5CheckpointTest(unittest.TestCase):
+class TrainingCheckpointTest(unittest.TestCase):
     def test_warmstart_loads_compatible_weights_without_training_state(self):
         class OldModel(torch.nn.Module):
             def __init__(self):
@@ -311,138 +318,6 @@ class Phase5CheckpointTest(unittest.TestCase):
             ):
                 load_checkpoint(str(checkpoint_path), restored_state)
 
-
-class Phase5RunSummaryTest(unittest.TestCase):
-    def test_summary_requires_complete_artifacts_and_writes_curves(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            run_dir = Path(tmpdir)
-            steps = [2, 5]
-            (run_dir / "training_complete.json").write_text(
-                json.dumps({"status": "complete", "completed_optimizer_step": 5}),
-                encoding="utf-8",
-            )
-            for step in steps:
-                torch.save({
-                    "params": {"weight": torch.tensor([float(step)])},
-                    "ema_params1": {"weight": torch.tensor([float(step)])},
-                    "opt_state": {"state": {0: {"momentum": torch.tensor([0.0])}}},
-                    "step": step,
-                    "epoch": 0.0,
-                }, run_dir / f"checkpoint_{step}")
-
-            training_rows = []
-            for step in range(1, 6):
-                training_rows.append({
-                    "step": step,
-                    "optimizer_step": step,
-                    "samples_seen": step * 12,
-                    "elapsed_training_seconds": float(step),
-                    "elapsed_run_seconds": float(step + 1),
-                    "loss": 2.0 / step,
-                    "l2_loss": 1.0 / step,
-                    "ce_loss": 3.0 / step,
-                    "lr": 0.001,
-                    "steps_per_second": 4.0,
-                    "samples_per_second": 48.0,
-                    "timestamp_utc": "2026-08-09T00:00:00+00:00",
-                })
-            (run_dir / "train_metrics.jsonl").write_text(
-                "".join(json.dumps(row) + "\n" for row in training_rows),
-                encoding="utf-8",
-            )
-
-            for step in steps:
-                eval_dir = run_dir / "evaluations" / f"checkpoint_{step}" / "sampling"
-                eval_dir.mkdir(parents=True)
-                (eval_dir / "metrics.jsonl").write_text(
-                    json.dumps({
-                        "step": step, "bleu": float(step), "rouge1": step + 1.0,
-                        "rouge2": step + 2.0, "rougeL": step + 3.0,
-                    }) + "\n",
-                    encoding="utf-8",
-                )
-                (eval_dir / f"all_generated_0_{step}.jsonl").write_text(
-                    '{"generated": "a"}\n{"generated": "b"}\n',
-                    encoding="utf-8",
-                )
-
-            baseline_checkpoint = run_dir / "elf_checkpoint_10"
-            torch.save({
-                "params": {"weight": torch.tensor([10.0])},
-                "ema_params1": {"weight": torch.tensor([10.0])},
-                "opt_state": {"state": {0: {"momentum": torch.tensor([0.0])}}},
-                "step": 10,
-                "epoch": 0.0,
-            }, baseline_checkpoint)
-            baseline_eval_dir = run_dir / "comparisons" / "elf_b_checkpoint_10" / "sampling"
-            baseline_eval_dir.mkdir(parents=True)
-            (baseline_eval_dir / "metrics.jsonl").write_text(
-                json.dumps({
-                    "step": 10, "bleu": 0.5, "rouge1": 2.0,
-                    "rouge2": 1.0, "rougeL": 1.5,
-                }) + "\n",
-                encoding="utf-8",
-            )
-            (baseline_eval_dir / "all_generated_0_10.jsonl").write_text(
-                '{"generated": "a"}\n{"generated": "b"}\n',
-                encoding="utf-8",
-            )
-
-            summarize_run(
-                run_dir, steps, batch_size=12, expected_samples=2,
-                verify_checkpoints=True,
-                warmstart_training_samples=40,
-                baseline_eval_dir=baseline_eval_dir.parent,
-                baseline_checkpoint=baseline_checkpoint,
-                baseline_step=10,
-                baseline_training_samples=40,
-            )
-
-            self.assertTrue((run_dir / "evaluation_complete.json").is_file())
-            self.assertTrue((run_dir / "run_complete.json").is_file())
-            self.assertTrue((run_dir / "analysis" / "loss_vs_samples.svg").is_file())
-            self.assertTrue((run_dir / "analysis" / "evaluation_vs_time.svg").is_file())
-            self.assertTrue((run_dir / "analysis" / "comparison_bleu.svg").is_file())
-            self.assertTrue((run_dir / "analysis" / "comparison_rouge_l.svg").is_file())
-            evaluation_complete = json.loads(
-                (run_dir / "evaluation_complete.json").read_text(encoding="utf-8")
-            )
-            self.assertEqual(len(evaluation_complete["checkpoint_audits"]), 2)
-            self.assertEqual(evaluation_complete["baseline_evaluation"]["model"], "ELF-B")
-
-    def test_summary_rejects_incomplete_generated_sample_count(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            run_dir = Path(tmpdir)
-            (run_dir / "training_complete.json").write_text(
-                json.dumps({"status": "complete", "completed_optimizer_step": 1}),
-                encoding="utf-8",
-            )
-            (run_dir / "checkpoint_1").write_bytes(b"checkpoint")
-            (run_dir / "train_metrics.jsonl").write_text(
-                json.dumps({
-                    "step": 1, "optimizer_step": 1, "samples_seen": 12,
-                    "elapsed_training_seconds": 1.0, "elapsed_run_seconds": 2.0,
-                    "loss": 1.0, "l2_loss": 1.0, "ce_loss": 1.0, "lr": 0.001,
-                    "steps_per_second": 4.0, "samples_per_second": 48.0,
-                    "timestamp_utc": "2026-08-09T00:00:00+00:00",
-                }) + "\n",
-                encoding="utf-8",
-            )
-            eval_dir = run_dir / "evaluations" / "checkpoint_1" / "sampling"
-            eval_dir.mkdir(parents=True)
-            (eval_dir / "metrics.jsonl").write_text(
-                json.dumps({
-                    "step": 1, "bleu": 1.0, "rouge1": 1.0,
-                    "rouge2": 1.0, "rougeL": 1.0,
-                }) + "\n",
-                encoding="utf-8",
-            )
-            (eval_dir / "all_generated_0_1.jsonl").write_text(
-                '{"generated": "only one"}\n', encoding="utf-8",
-            )
-
-            with self.assertRaisesRegex(ValueError, "has 1 samples, expected 2"):
-                summarize_run(run_dir, [1], batch_size=12, expected_samples=2)
 
 
 if __name__ == "__main__":

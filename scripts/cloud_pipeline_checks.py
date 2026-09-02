@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Artifact and lifecycle checks for the resumable Phase 5 mechanism pipeline."""
+"""Artifact and lifecycle checks for the resumable cloud pair pipeline."""
 
 import argparse
 from datetime import datetime, timezone
@@ -79,17 +79,6 @@ def finalize_evaluation(
     return True
 
 
-def diagnostic_is_complete(path: Path, label: str) -> bool:
-    payload = _read_json(path)
-    models = payload.get("models") if isinstance(payload, dict) else None
-    return bool(
-        payload
-        and payload.get("status") == "complete"
-        and isinstance(models, dict)
-        and label in models
-    )
-
-
 def _atomic_write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -141,10 +130,6 @@ def main() -> int:
     finalize.add_argument("step", type=int)
     finalize.add_argument("samples", type=int)
 
-    diagnostic = subparsers.add_parser("diagnostic")
-    diagnostic.add_argument("path", type=Path)
-    diagnostic.add_argument("label")
-
     status = subparsers.add_parser("status")
     status.add_argument("output", type=Path)
     status.add_argument("value", choices=("running", "failed", "complete"))
@@ -165,8 +150,6 @@ def main() -> int:
         return 0 if finalize_evaluation(
             args.directory, args.label, args.step, args.samples
         ) else 1
-    if args.command == "diagnostic":
-        return 0 if diagnostic_is_complete(args.path, args.label) else 1
     write_pipeline_status(
         args.output,
         args.value,

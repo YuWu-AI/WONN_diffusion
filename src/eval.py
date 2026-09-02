@@ -21,7 +21,12 @@ from utils.checkpoint_utils import load_checkpoint
 from utils.train_utils import TrainState, get_optimizer
 from utils.data_utils import load_jsonl_dataset, load_dataset_split, get_pad_token_id
 from generation import test_generation_uncond, test_generation_cond
-from configs.config import load_config_from_yaml, apply_config_overrides, load_sampling_configs
+from configs.config import (
+    apply_config_overrides,
+    load_config_from_yaml,
+    load_sampling_configs,
+    resolve_batch_sizes,
+)
 
 logging.basicConfig(
     format="%(levelname)s - %(name)s - %(message)s",
@@ -71,18 +76,15 @@ def main():
         log_for_0(f"Applied {len(args.config_override)} config override(s)")
 
     world = dist.get_world_size() if dist.is_initialized() else 1
+    local_batch_size, total_batch_size = resolve_batch_sizes(
+        config.global_batch_size, config.batch_size, world,
+    )
     if config.global_batch_size is not None:
         log_for_0(f"Using global batch size for evaluation: {config.global_batch_size}")
-        total_batch_size = config.global_batch_size
-        local_batch_size = total_batch_size // world
-        config.batch_size = local_batch_size
-    elif config.batch_size is not None:
-        log_for_0(f"Using batch size per device: {config.batch_size}")
-        total_batch_size = config.batch_size * world
-        local_batch_size = config.batch_size
-        config.global_batch_size = total_batch_size
     else:
-        raise ValueError("Either global_batch_size or batch_size must be specified")
+        log_for_0(f"Using batch size per device: {config.batch_size}")
+    config.batch_size = local_batch_size
+    config.global_batch_size = total_batch_size
 
     log_for_0(f"Config loaded from {args.config}")
     log_for_0(f"Model: {config.model}")

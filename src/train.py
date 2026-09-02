@@ -33,12 +33,14 @@ from utils.train_utils import (
     attach_lr_scheduler,
 )
 from generation import run_generation
-from configs.config import load_config_from_yaml, apply_config_overrides, load_sampling_configs, SamplingConfig
-from modules.model_factory import build_model
-from modules.denoiser_objectives import (
-    denoiser_objectives_enabled,
-    validate_denoiser_objective_config,
+from configs.config import (
+    SamplingConfig,
+    apply_config_overrides,
+    load_config_from_yaml,
+    load_sampling_configs,
+    resolve_batch_sizes,
 )
+from modules.model_factory import build_model
 from utils.data_utils import get_dataloader, prepare_batch, load_dataset, get_pad_token_id
 from train_step import train_step
 
@@ -257,13 +259,21 @@ def _finalize_training(
 
 
 def run_training(config, *, force_cpu: bool = False):
-    validate_denoiser_objective_config(config)
     process_started_perf = time.perf_counter()
     _init_distributed()
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     device = torch.device("cpu") if force_cpu or not torch.cuda.is_available() else torch.device(f"cuda:{local_rank}")
     rank = _rank()
     world = _world_size()
+    local_batch_size, total_batch_size = resolve_batch_sizes(
+        config.global_batch_size, config.batch_size, world,
+    )
+    if config.global_batch_size is not None:
+        log_for_0(f"Using global batch size: {config.global_batch_size}")
+    else:
+        log_for_0(f"Using batch size per device: {config.batch_size}")
+    config.batch_size = local_batch_size
+    config.global_batch_size = total_batch_size
 
     log_for_0("=" * 60)
     log_for_0("ELF Diffusion Model Training (PyTorch)")
@@ -353,19 +363,6 @@ def run_training(config, *, force_cpu: bool = False):
     torch.manual_seed(config.seed + rank)
     if device.type == "cuda":
         torch.cuda.manual_seed_all(config.seed + rank)
-
-    if config.global_batch_size is not None:
-        log_for_0(f"Using global batch size: {config.global_batch_size}")
-        total_batch_size = config.global_batch_size
-        local_batch_size = total_batch_size // world
-        config.batch_size = local_batch_size
-    elif config.batch_size is not None:
-        log_for_0(f"Using batch size per device: {config.batch_size}")
-        total_batch_size = config.batch_size * world
-        local_batch_size = config.batch_size
-        config.global_batch_size = total_batch_size
-    else:
-        raise ValueError("Either global_batch_size or batch_size must be specified")
 
     steps_per_epoch = len(train_dataset) // total_batch_size
     num_train_steps = steps_per_epoch * config.epochs
@@ -670,43 +667,6 @@ def run_training(config, *, force_cpu: bool = False):
                 avg_ce = float(reduced["ce_loss_sum"]) / max(
                     float(reduced["ce_token_count"]), 1.0
                 )
-                aux_log = {}
-                if denoiser_objectives_enabled(config):
-                    aux_totals = {
-                        key: torch.stack([
-                            m.get(key, torch.zeros_like(m["loss"]))
-                            for m in train_metrics
-                        ]).sum()
-                        for key in (
-                            "token_loss_sum", "token_count",
-                            "contrastive_loss_sum", "contrastive_count",
-                            "aux_example_count",
-                        )
-                    }
-                    aux_means = torch.stack([
-                        torch.stack([
-                            m.get("aux_loss", torch.zeros_like(m["loss"]))
-                            for m in train_metrics
-                        ]).mean(),
-                        torch.stack([
-                            m.get("aux_scale", torch.zeros_like(m["loss"]))
-                            for m in train_metrics
-                        ]).mean(),
-                        *aux_totals.values(),
-                    ])
-                    if dist.is_available() and dist.is_initialized():
-                        dist.all_reduce(aux_means, op=dist.ReduceOp.SUM)
-                        aux_means[:2] = aux_means[:2] / dist.get_world_size()
-                    aux_values = aux_means.tolist()
-                    aux_log = {
-                        "aux_loss": float(aux_values[0]),
-                        "aux_scale": float(aux_values[1]),
-                        "token_loss": float(aux_values[2]) / max(float(aux_values[3]), 1.0),
-                        "source_contrastive_loss": (
-                            float(aux_values[4]) / max(float(aux_values[5]), 1.0)
-                        ),
-                        "aux_examples": float(aux_values[6]),
-                    }
                 now = time.time()
                 steps_per_sec = (global_step - last_log_step) / max(now - last_log_time, 1e-8)
                 current_lr = state.optimizer.param_groups[0]["lr"]
@@ -719,20 +679,13 @@ def run_training(config, *, force_cpu: bool = False):
                     "l2": f"{avg_l2:.4f}", "ce": f"{avg_ce:.4f}",
                     "sps": f"{steps_per_sec:.1f}", "lr": f"{current_lr:.2e}",
                 }
-                if aux_log:
-                    postfix_dict["aux"] = f"{aux_log['aux_loss']:.4f}"
                 log_for_0(postfix_dict)
                 epoch_pbar.set_postfix(**postfix_dict)
 
                 if rank == 0:
-                    aux_message = (
-                        f", aux={aux_log['aux_loss']:.4f}, token={aux_log['token_loss']:.4f}, "
-                        f"source={aux_log['source_contrastive_loss']:.4f}"
-                        if aux_log else ""
-                    )
                     tqdm.write(
                         f"INFO - engine - Step {global_step}: loss={avg_loss:.4f}, "
-                        f"l2={avg_l2:.4f}, ce={avg_ce:.4f}{aux_message}, "
+                        f"l2={avg_l2:.4f}, ce={avg_ce:.4f}, "
                         f"lr={current_lr:.2e}, steps/sec={steps_per_sec:.2f}"
                     )
                     if config.use_wandb and wandb is not None:
@@ -745,9 +698,6 @@ def run_training(config, *, force_cpu: bool = False):
                                 "train_ce_loss": avg_ce, "lr": current_lr,
                                 "epoch": current_epoch_progress, "step": global_step,
                             }
-                            wandb_payload.update({
-                                f"train_{key}": value for key, value in aux_log.items()
-                            })
                             wandb.log(wandb_payload, step=global_step)
                         except Exception:
                             pass
@@ -766,7 +716,6 @@ def run_training(config, *, force_cpu: bool = False):
                             "elapsed_run_seconds": time.perf_counter() - process_started_perf,
                             "timestamp_utc": _utc_now(),
                         }
-                        metric_payload.update(aux_log)
                         metrics_file.write(json.dumps(metric_payload) + "\n")
 
                 train_metrics = []
@@ -839,7 +788,11 @@ def run_training(config, *, force_cpu: bool = False):
             "completed_train_step": global_step,
             "completed_optimizer_step": global_step // grad_accum_steps,
             "samples_seen": global_step * total_batch_size,
+            "world_size": world,
+            "batch_size_per_device": local_batch_size,
+            "grad_accum_steps": grad_accum_steps,
             "effective_batch_size": total_batch_size * grad_accum_steps,
+            "learning_rate": config.lr,
             "model": config.model,
             "model_parameters": total_params,
             "gpu_name": torch.cuda.get_device_name(device) if device.type == "cuda" else None,

@@ -73,16 +73,6 @@ class Config:
     t_eps: float = 5e-2
     time_schedule: str = "logit_normal"  # 'logit_normal' or 'uniform'
 
-    # Optional semantic supervision on denoiser-predicted x0. Defaults preserve
-    # the original Flow Matching training path without extra RNG or forwards.
-    denoiser_token_loss_weight: float = 0.0
-    denoiser_source_contrastive_weight: float = 0.0
-    denoiser_aux_max_t: float = 0.25
-    denoiser_aux_start_step: int = 0
-    denoiser_aux_warmup_steps: int = 0
-    denoiser_source_contrastive_prob: float = 1.0
-    denoiser_source_contrastive_margin: float = 0.1
-
     # Decoder objective
     decoder_prob: float = 0.5  # Probability of decoder (CE) step vs denoiser (L2) step
     decoder_noise_scale: float = 1.0  # Scale of noise in logit-normal-noised latent for CE branch
@@ -156,6 +146,36 @@ class Config:
     # Misc
     seed: int = 0
     num_workers: int = 8
+
+
+def resolve_batch_sizes(global_batch_size, batch_size, world_size: int) -> tuple[int, int]:
+    """Resolve per-rank and total batch sizes without silently dropping samples."""
+    if isinstance(world_size, bool) or not isinstance(world_size, int) or world_size <= 0:
+        raise ValueError("world_size must be a positive integer")
+
+    if global_batch_size is not None:
+        if (
+            isinstance(global_batch_size, bool)
+            or not isinstance(global_batch_size, int)
+            or global_batch_size <= 0
+        ):
+            raise ValueError("global_batch_size must be a positive integer")
+        if global_batch_size % world_size != 0:
+            raise ValueError(
+                f"global_batch_size ({global_batch_size}) must be divisible by "
+                f"world_size ({world_size})"
+            )
+        return global_batch_size // world_size, global_batch_size
+
+    if (
+        isinstance(batch_size, bool)
+        or not isinstance(batch_size, int)
+        or batch_size <= 0
+    ):
+        raise ValueError(
+            "batch_size must be a positive integer when global_batch_size is not set"
+        )
+    return batch_size, batch_size * world_size
 
 
 def load_config_from_yaml(path: str) -> Config:

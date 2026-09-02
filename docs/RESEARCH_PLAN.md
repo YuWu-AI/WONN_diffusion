@@ -1,6 +1,6 @@
 # ELF-WONN 新阶段研究计划
 
-> 计划重置日期：2026-08-11；代码状态更新：2026-09-01
+> 计划重置日期：2026-08-11；代码状态更新：2026-09-02
 > Phase 1–4 的基础实现与验收已经完成，统一沉淀在
 > [`PROJECT_HANDOFF.md`](../PROJECT_HANDOFF.md)。本文从新的 Phase 1 重新编号。
 
@@ -17,7 +17,8 @@ WMT14 翻译不再承担主要研究结论。新 Phase 1 只用它验证代码�
 
 ## 2. Phase 1 当前代码进度
 
-原 Phase 5 的实现已经从 `phase5-wmt14` 正式合并到 `main`。当前主线已经实现：
+原 Phase 5 中仍通用的训练能力已经从 `phase5-wmt14` 合并到 `main`；旧实验专属脚本、配置和
+测试已退出当前目录。当前主线已经实现：
 
 - 按 optimizer step 精确限制训练预算；
 - 在指定 step 保存 checkpoint；
@@ -26,22 +27,22 @@ WMT14 翻译不再承担主要研究结论。新 Phase 1 只用它验证代码�
 - 从兼容 checkpoint 只加载 model/EMA 的 warm start；
 - 区分纯训练完成标记与评测完成标记；
 - checkpoint 结构、finite values、生成工件和指标的汇总校验；
-- WMT14 ELF/WONN 独立实验 YAML、profiling、后台流水线和 13 项训练工程测试（测试文件当前仍名为
-  `tests/test_phase5_training.py`）；
+- WMT14 ELF/WONN 独立实验 YAML、profiling、后台流水线和训练工程回归测试；
 - 单机单卡与单机多卡 `torchrun` 启动入口；
 - 新 WONN 文本交互：逐振子 S/I MLP、完整 QKV/O、默认 SDPA，以及独立
   `OmegaTransition`；旧 QK dimension/coupling mode/warm-start 入口已移除；
-- L6/T3 50K/130K、机制消融和 L12/K768/T3 90K 的独立配置、流水线与分析入口；
-- 相对项目路径和 `DLM_WONN_PYTHON`、`DLM_WONN_ELF_BASELINE` 等环境变量覆盖；正式流水线
+- 4-GPU 云端配对入口：默认按 2+2 并发训练，也支持 4 卡串行；两边从头训练到 60K，对 9 个
+  checkpoint 完成 18 次评测并生成一张复合质量曲线；
+- 相对项目路径和 `DLM_WONN_PYTHON` 等环境变量覆盖；正式流水线
   只要求 clean checkout，不再依赖特定 worktree。
 
-历史验证记录见 `docs/WONN_TEXT_INTERACTION_REDESIGN_VALIDATION.md`；当前入口和产物路径以
-`docs/PROJECT_STRUCTURE.md` 为准。桌面 `systemd-run` launcher 仅是本地便利封装，云端容器直接
-运行对应 `run_*_pipeline.sh`。脚本默认复用本地缓存；全新云端首次下载时显式设置
+旧实验的实现过程只保留在 Git 历史，当前入口和产物路径以 `docs/PROJECT_STRUCTURE.md` 为准。
+云端容器直接运行 `run_cloud_pair_pipeline.sh`。脚本默认复用缓存；全新云端首次下载时显式设置
 `HF_HUB_OFFLINE=0 HF_DATASETS_OFFLINE=0`。
 
-当前剩余工程门槛是：在 clean merge commit 上重新完成 CPU 回归、CUDA single-batch、故意中断/
-resume 和云端硬件 smoke，再启动新的云端实验。历史本地输出继续保留，但只作为诊断与复现材料。
+当前剩余工程门槛是：把已通过 CPU 回归的改动形成 clean commit，在目标 4-GPU 主机完成 CUDA
+single-batch、故意中断/resume 和多卡 smoke，再启动正式 60K 配对实验。历史本地输出继续保留，
+但只作为诊断与复现材料。
 
 ## 3. Phase 1：云端工程基线
 
@@ -66,7 +67,7 @@ resume 和云端硬件 smoke，再启动新的云端实验。历史本地输出�
 2. 单卡 BF16 forward/backward 和单 batch train smoke。
 3. checkpoint save、故意中断、resume、metrics 连续性检查。
 4. 单机多 GPU 100-step smoke，确认无 rank hang。
-5. 云端从随机初始化分别运行 ELF 与 WONN，不使用本地 warm-start 结果。
+5. 云端从随机初始化分别运行 ELF 与 WONN 到 60K，不使用本地 warm-start 结果。
 6. 使用同一数据、seed、训练 token/step 预算和采样配置评测。
 7. 独立检查 checkpoint、日志、生成样本和 completion manifest。
 
@@ -166,6 +167,8 @@ Phase 3 不早于 Phase 2 的长序列 gate；否则无法区分 backbone 长序
 ## 8. 下一步唯一主线
 
 1. 在合并后的 `main` 完成 CPU、CUDA single-batch、checkpoint/resume 和 pipeline preflight。
-2. 将 clean commit、代码仓库和所需历史 baseline 上传到云端持久卷。
-3. 在云端先跑短程 from-scratch pilot，再决定正式 Phase 1。
+2. 将 clean commit 和代码仓库部署到云端；只预下载当前 YAML 固定的数据、encoder 和 tokenizer，
+   不上传历史 checkpoint 或 baseline 产物。
+3. 按 [`CLOUD_PHASE1_RUNBOOK.md`](CLOUD_PHASE1_RUNBOOK.md) 完成 profile、preflight、
+   短程 smoke，再启动正式 60K Phase 1。
 4. Phase 1 工程验收后立即进入 Phase 2 OWT，不继续扩展 WMT14。

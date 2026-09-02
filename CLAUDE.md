@@ -9,5 +9,5 @@
 - checkpoint、日志、生成样本和本地数据不得提交，统一放入 `.gitignore` 覆盖的目录。
 - 云端实验必须从 clean commit 启动，并记录配置、依赖、数据 revision、硬件和随机种子。
 
-项目技术基线见 `PROJECT_HANDOFF.md`，新 Phase 1–3 计划见 `docs/RESEARCH_PLAN.md`；已验证环境和
-官方 ELF 命令分别见 `docs/ENVIRONMENT.md` 与 `docs/ELF_UPSTREAM_README.md`。
+文档状态和阅读顺序见 `docs/README.md`；技术基线见 `PROJECT_HANDOFF.md`，Phase 1–3 计划见
+`docs/RESEARCH_PLAN.md`，当前 4-GPU 运行口径见 `docs/CLOUD_PHASE1_RUNBOOK.md`。

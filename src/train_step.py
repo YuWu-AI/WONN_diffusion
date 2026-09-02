@@ -15,10 +15,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from modules.denoiser_objectives import (
-    compute_denoiser_auxiliary_loss,
-    denoiser_objectives_enabled,
-)
 from utils.train_utils import TrainState, ema_update
 from utils.encoder_utils import encode_text
 from utils.sampling_utils import (
@@ -240,8 +236,7 @@ def train_step(
     # L2 per-token (used on denoiser-mode rows). v_pred is extracted with
     # (denoiser_z, t) — meaningful only for denoiser rows; decoder rows are
     # masked out below.
-    v_pred, x_pred = net_out_to_v_x(net_out, denoiser_z, denoiser_t, t_eps)
-    x_pred = restore_cond(x_pred, x0, cond_seq_mask)
+    v_pred, _ = net_out_to_v_x(net_out, denoiser_z, denoiser_t, t_eps)
     v_final_target = get_v_target(
         denoiser_z, denoiser_t, base_v_target=v_target, x_tokens=x0,
         shared_net_out_uncond=shared_net_out_uncond,
@@ -257,30 +252,6 @@ def train_step(
     # decoder_prob * mean_CE + (1 - decoder_prob) * mean_L2.
     total_sum = (ce_per_token * ce_mask).sum() + (l2_per_token * l2_mask).sum()
     loss = total_sum / torch.clamp(loss_mask_f.sum(), min=1.0)
-
-    aux_metrics = {}
-    if denoiser_objectives_enabled(config):
-        auxiliary_cfg_scale = self_cond_cfg_scale
-        if auxiliary_cfg_scale is None:
-            auxiliary_cfg_scale = torch.ones(
-                (batch_size,), dtype=dtype, device=device
-            )
-        auxiliary_loss, aux_metrics = compute_denoiser_auxiliary_loss(
-            model=model,
-            ema_params=state.ema_params1,
-            x_pred=x_pred,
-            targets=decoder_targets,
-            target_mask=loss_mask_f,
-            cond_mask=cond_seq_mask.squeeze(-1),
-            timesteps=denoiser_t,
-            denoiser_rows=(1.0 - decoder_step_active),
-            label_drop_mask=label_drop_mask,
-            self_cond_cfg_scale=auxiliary_cfg_scale,
-            config=config,
-            step=state.step,
-            generator=gen,
-        )
-        loss = loss + auxiliary_loss
 
     # Per-branch metrics: mean per-token within each branch.
     ce_loss_val = ((ce_per_token * ce_mask).sum()
@@ -313,5 +284,4 @@ def train_step(
         "ce_loss_sum": (ce_per_token * ce_mask).sum().detach(),
         "ce_token_count": ce_mask.sum().detach(),
     }
-    metrics.update(aux_metrics)
     return state, metrics

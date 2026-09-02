@@ -46,7 +46,7 @@ class ModelFactoryTest(unittest.TestCase):
                 config, text_encoder_dim=16, max_length=6, vocab_size=23
             )
 
-    def test_wonn_configs_have_no_legacy_coupling_fields_or_warmstart_entry(self):
+    def test_wonn_configs_have_no_legacy_coupling_fields(self):
         config_root = REPO_ROOT / "src/configs/training_configs"
         wonn_configs = []
         for path in config_root.rglob("*.yml"):
@@ -58,10 +58,6 @@ class ModelFactoryTest(unittest.TestCase):
             self.assertNotIn("wonn_coupling_mode", payload, path)
             self.assertIsNone(payload.get("init_from"), path)
         self.assertTrue(wonn_configs)
-        self.assertFalse(
-            (config_root / "train_de-en_ELF-WONN-B-phase5-warmstart-hwopt.yml").exists()
-        )
-        self.assertFalse((REPO_ROOT / "scripts/run_phase5_warmstart_pipeline.sh").exists())
 
 
 if __name__ == "__main__":

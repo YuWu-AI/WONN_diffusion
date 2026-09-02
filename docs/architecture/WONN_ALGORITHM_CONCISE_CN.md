@@ -223,8 +223,8 @@ $$
 \xrightarrow{\rm decoder}\widehat{\mathbf S}}
 $$
 
-口径：上文对应已训练的 Phase 5 正式 50K 配置 $T=3$；当前 main 通用 WMT YAML
-默认 $T=2$，其余公式不变。
+口径：公式对任意层数、振子数和 inner steps 成立；当前云端配对使用 $L=12$、$K=768$、$T=3$，
+基础 WONN YAML 使用 $L=6$、$K=384$、$T=2$。
 
 实现：src/modules/wonn_model.py；src/modules/wonn_layers.py；src/train_step.py；
 src/utils/sampling_utils.py；src/utils/generation_utils.py。

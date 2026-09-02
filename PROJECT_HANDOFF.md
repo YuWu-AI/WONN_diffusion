@@ -175,14 +175,17 @@ phase features 读取，以避免绕过 oscillator dynamics。
 | 文件或目录 | 用途 |
 | --- | --- |
 | `README.md` | 快速开始与代码导航 |
+| `docs/README.md` | 文档状态、分类与阅读顺序 |
 | `docs/RESEARCH_PLAN.md` | 新 Phase 1–3、当前代码进度和云端执行门槛 |
 | `docs/PROJECT_STRUCTURE.md` | 代码分层、Phase 5 脚本/配置和本地数据索引 |
+| `docs/CLOUD_PHASE1_RUNBOOK.md` | 当前 4-GPU、60K 云端配对运行口径 |
 | `docs/ENVIRONMENT.md` | 已验证本机环境与依赖快照 |
 | `docs/ELF_UPSTREAM_README.md` | ELF 官方 PyTorch 命令与参考指标 |
 | `src/modules/` | ELF 与 WONN 正式模型实现 |
 | `tests/`、`scripts/verify_phase*.py` | 契约和回归验收 |
 | `references/` | 只读上游参考实现 |
 
-原 `phase5-wmt14` 分支中的 optimizer-step 训练预算、checkpoint/resume、manifest、独立评测、
-机制诊断和 L12/K768/90K 流水线已经整合到 `main`。这些能力不改变第 2 节的 ELF 接口边界；
-旧 Phase 5 产物仍是历史诊断数据，不自动升级为新研究计划的正式结论。
+当前 `main` 保留 optimizer-step 训练预算、checkpoint/resume、独立评测和产物校验等公共能力，
+并以 4-GPU、60K 配对流水线作为 Phase 1 的唯一 WMT14 入口。旧 20K/50K/90K/130K、机制消融和
+本地后台脚本已从当前目录移除，可从 Git 历史追溯；旧 Phase 5 产物仍只是历史诊断数据，不自动
+升级为新研究计划的正式结论。
