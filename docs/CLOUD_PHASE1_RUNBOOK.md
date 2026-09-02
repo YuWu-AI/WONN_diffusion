@@ -81,6 +81,8 @@ bash scripts/verify_cloud_env.sh
 
 验证脚本会检查固定 Python/依赖、clean checkout、4 张可见 GPU、原生 BF16、CUDA
 `torch.compile` 和项目模块导入。系统镜像只有在这一步完整通过后才可保存。
+锁定环境使用 PyTorch 2.6.0 的 CUDA 12.4 wheel，以匹配目标主机的 NVIDIA 550 驱动；不要改用
+CUDA 13 wheel，也不要跳过驱动兼容性检查。
 
 数据、encoder 和 tokenizer 必须按两份 YAML 固定的 revision 预下载到持久缓存。首次联网准备时可
 设置 `HF_HUB_OFFLINE=0 HF_DATASETS_OFFLINE=0`；正式运行默认离线，避免中途网络漂移。

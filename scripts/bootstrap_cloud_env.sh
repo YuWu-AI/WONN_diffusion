@@ -4,6 +4,7 @@ set -euo pipefail
 readonly UV_VERSION="0.11.29"
 readonly UV_BIN="/usr/local/bin/uv"
 readonly PYTHON_VERSION="3.10.12"
+readonly TORCH_BACKEND="cu124"
 readonly VENV_DIR="/opt/dlm-wonn-venv"
 readonly UV_PYTHON_DIR="/opt/dlm-wonn-python"
 readonly UV_CACHE_DIR="/var/cache/dlm-wonn-uv"
@@ -111,6 +112,7 @@ command -v ninja >/dev/null 2>&1 || die "ninja was not installed"
 log "synchronizing exact Python dependencies from requirements-lock.txt"
 "$UV_BIN" pip sync \
     --python "$VENV_DIR/bin/python" \
+    --torch-backend "$TORCH_BACKEND" \
     --strict \
     "$requirements_lock"
 
@@ -119,7 +121,7 @@ log "checking installed dependency metadata"
 
 log "writing environment manifest to $MANIFEST_PATH"
 "$VENV_DIR/bin/python" - \
-    "$MANIFEST_PATH" "$requirements_lock" "$UV_VERSION" <<'PY'
+    "$MANIFEST_PATH" "$requirements_lock" "$UV_VERSION" "$TORCH_BACKEND" <<'PY'
 import hashlib
 import json
 import os
@@ -133,6 +135,7 @@ import torch
 manifest_path = Path(sys.argv[1])
 lock_path = Path(sys.argv[2])
 uv_version = sys.argv[3]
+torch_backend = sys.argv[4]
 os_release = {}
 for raw_line in Path("/etc/os-release").read_text().splitlines():
     if "=" in raw_line:
@@ -148,6 +151,7 @@ payload = {
     "uv": uv_version,
     "torch": torch.__version__,
     "torch_cuda_runtime": torch.version.cuda,
+    "torch_backend": torch_backend,
     "requirements_lock": str(lock_path),
     "requirements_lock_sha256": hashlib.sha256(lock_path.read_bytes()).hexdigest(),
 }

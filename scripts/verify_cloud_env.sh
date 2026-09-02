@@ -2,7 +2,7 @@
 set -euo pipefail
 
 readonly UV_BIN="/usr/local/bin/uv"
-readonly EXPECTED_CUDA_RUNTIME="13.0"
+readonly EXPECTED_CUDA_RUNTIME="12.4"
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
 python_bin="${DLM_WONN_PYTHON:-/opt/dlm-wonn-venv/bin/python}"
