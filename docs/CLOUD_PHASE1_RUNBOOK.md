@@ -1,4 +1,4 @@
-# Phase 1：4-GPU、50K/60K 云端配对实验运行手册
+# Phase 1：4-GPU、30K 云端配对实验运行手册
 
 > 状态：代码已实现，尚未在目标 4-GPU 云主机完成 CUDA smoke 或正式训练。
 > 本文是当前 WMT14 工程实验的唯一运行口径；历史 50K/90K/130K 流水线不属于本轮输入。
@@ -9,10 +9,10 @@
 
 - 从同一 clean commit、同一 seed 和同一数据 revision 随机初始化 ELF-B 与
   WONN-L12/K768/T3；
-- 两个模型均训练到同一个目标：默认 `60000` optimizer steps，超时预测时回退到 `50000`；
+- 两个模型均训练到 `30000` optimizer steps；
 - 两边固定 global batch 24（每卡 12）、学习率 `5e-4`、warmup 3000、seed 42；
-- 60K 保存 `5K, 10K, 20K, 40K, 60K`，50K 保存 `5K, 10K, 20K, 40K, 50K`；
-- 每个 checkpoint 使用同一批 500 个验证样本，共 10 次评测；
+- 两边都保存 `10K, 20K, 25K, 30K`；
+- 每个 checkpoint 使用同一批 500 个验证样本，共 8 次评测；
 - 生成 `comparison.json`、`metrics_by_checkpoint.csv`、`comparison.md` 和一张
   `quality_curves.svg` 复合折线图；
 - `pipeline_complete.json` 存在且内容通过产物校验。
@@ -42,7 +42,7 @@ steps 与 samples seen。
 ```text
 GPU 0-1  -> ELF-B，2-rank DDP
 GPU 2-3  -> WONN，2-rank DDP
-两边并发训练；训练完成后 GPU 0-3 静态消费 10 个 checkpoint 评测任务
+两边并发训练；训练完成后 GPU 0-3 静态消费 8 个 checkpoint 评测任务
 ```
 
 本轮不测试 `4-serial`，固定 `grad_accum_steps=1`：
@@ -93,31 +93,23 @@ CUDA 13 wheel，也不要跳过驱动兼容性检查。
 export HF_HOME=/root/shared-nvme/dlm-wonn/cache/huggingface
 ```
 
-## 6. 唯一 smoke 与预算选择
+## 6. 唯一 smoke 与固定预算
 
 只执行一次 2+2 并发 smoke：ELF 使用 GPU 0、1，WONN 使用 GPU 2、3；每卡 batch 12、global
 batch 24、lr `5e-4`、warmup 3000。先运行到约 100 step 并保存 checkpoint，再从同一目录恢复到
 约 200 step。记录两边稳定后的 seconds/step、samples/second、峰值显存，并验证 loss/梯度/参数
 有限、DDP 正常退出、无 NCCL hang、checkpoint 可加载且恢复后的 step/metrics 连续。
 
-不搜索其他 batch、学习率、scheduler 或 GPU 布局。按下面的固定公式选择预算：
-
-```text
-训练时间 = max(ELF稳定seconds/step, WONN稳定seconds/step) × target_steps
-端到端预测 = (训练时间 + checkpoint保存 + 四卡队列评测 + 分析) × 1.15
-```
-
-若 60K 端到端预测不超过 4.5 小时，选 60K；否则直接选 50K。即使 50K 略超时也不再降低预算。
-选定目标后运行配置检查：
+不搜索其他 batch、学习率、scheduler 或 GPU 布局。正式预算固定为 30K；smoke 吞吐仅用于报告
+预计墙钟时间，不再决定 50K/60K 分支。运行配置检查：
 
 ```bash
 $DLM_WONN_PYTHON scripts/analyze_cloud_pair.py validate-configs \
   --elf-config src/configs/training_configs/train_de-en-ELF-B-cloud-60k.yml \
   --wonn-config src/configs/training_configs/train_de-en-WONN-L12K768T3-cloud-60k.yml \
-  --effective-batch 24 --world-size 2 --target-steps 60000
+  --effective-batch 24 --world-size 2 --target-steps 30000
 ```
-
-把末尾目标替换为实测选择的 `50000` 或 `60000`。两份配置必须使用相同的固定 `lr=0.0005`。
+两份配置必须使用相同的固定 `lr=0.0005`。
 
 ## 7. preflight 与正式启动
 
@@ -125,9 +117,9 @@ $DLM_WONN_PYTHON scripts/analyze_cloud_pair.py validate-configs \
 
 ```bash
 export DLM_WONN_PYTHON=/opt/dlm-wonn-venv/bin/python
-export DLM_WONN_TARGET_STEPS=60000
+export DLM_WONN_TARGET_STEPS=30000
 commit_short="$(git rev-parse --short=7 HEAD)"
-export DLM_WONN_PAIR_RUN_ROOT="/root/shared-nvme/dlm-wonn/runs/wmt14-pair-${commit_short}-60000"
+export DLM_WONN_PAIR_RUN_ROOT="/root/shared-nvme/dlm-wonn/runs/wmt14-pair-${commit_short}-30000"
 export DLM_WONN_GPU_LAYOUT=2+2
 export DLM_WONN_GLOBAL_BATCH_SIZE=24
 export DLM_WONN_EVAL_SAMPLES=500
@@ -141,8 +133,8 @@ export DLM_WONN_PREFLIGHT_ONLY=1
 bash scripts/run_cloud_pair_pipeline.sh
 ```
 
-目录名中的短 commit 和目标数字必须与当前 clean checkout 及 `DLM_WONN_TARGET_STEPS` 一致；50K
-时路径末尾和目标变量中的 `60000` 都改为 `50000`。preflight 会验证 clean commit、正好四卡、GPU 分组、batch、固定学习率、
+目录名中的短 commit 和目标数字必须与当前 clean checkout 及 `DLM_WONN_TARGET_STEPS` 一致。
+preflight 会验证 clean commit、正好四卡、GPU 分组、batch、固定学习率、
 warmup、目标 step、checkpoint、评测契约和输出目录名。
 
 preflight 通过后，在同一 clean commit 上取消该变量并在 `tmux` 中启动：

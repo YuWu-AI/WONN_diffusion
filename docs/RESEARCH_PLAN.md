@@ -31,8 +31,8 @@ WMT14 翻译不再承担主要研究结论。新 Phase 1 只用它验证代码�
 - 单机单卡与单机多卡 `torchrun` 启动入口；
 - 新 WONN 文本交互：逐振子 S/I MLP、完整 QKV/O、默认 SDPA，以及独立
   `OmegaTransition`；旧 QK dimension/coupling mode/warm-start 入口已移除；
-- 4-GPU 云端配对入口：固定 2+2 并发、global batch 24、lr `5e-4`、warmup 3000；默认从头
-  训练到 60K，若 4.5 小时端到端预测超限则回退到 50K；对 5 个 checkpoint 完成 10 次评测；
+- 4-GPU 云端配对入口：固定 2+2 并发、global batch 24、lr `5e-4`、warmup 3000；从头
+  训练到 30K；对 10K、20K、25K、30K 四个 checkpoint 完成 8 次评测；
 - 相对项目路径和 `DLM_WONN_PYTHON` 等环境变量覆盖；正式流水线
   只要求 clean checkout，不再依赖特定 worktree。
 
@@ -41,7 +41,7 @@ WMT14 翻译不再承担主要研究结论。新 Phase 1 只用它验证代码�
 `HF_HUB_OFFLINE=0 HF_DATASETS_OFFLINE=0`。
 
 当前剩余工程门槛是：把已通过 CPU 回归的改动形成 clean commit，在目标 4-GPU 主机完成 CUDA
-single-batch、故意中断/resume 和唯一一次 2+2 多卡 smoke，再启动正式 60K 或 50K 配对实验。历史本地输出继续保留，
+single-batch、故意中断/resume 和唯一一次 2+2 多卡 smoke，再启动正式 30K 配对实验。历史本地输出继续保留，
 但只作为诊断与复现材料。
 
 ## 3. Phase 1：云端工程基线
@@ -67,7 +67,7 @@ single-batch、故意中断/resume 和唯一一次 2+2 多卡 smoke，再启动�
 2. 单卡 BF16 forward/backward 和单 batch train smoke。
 3. checkpoint save、故意中断、resume、metrics 连续性检查。
 4. 单机多 GPU 约 100–200 step 的 2+2 并发 smoke，确认无 rank hang 并测量端到端速度。
-5. 按固定公式选择 60K 或 50K，云端从随机初始化并发运行 ELF 与 WONN，不使用 warm start。
+5. 按固定 30K 预算，云端从随机初始化并发运行 ELF 与 WONN，不使用 warm start。
 6. 使用同一数据、seed、训练 token/step 预算和采样配置评测。
 7. 独立检查 checkpoint、日志、生成样本和 completion manifest。
 
@@ -170,5 +170,5 @@ Phase 3 不早于 Phase 2 的长序列 gate；否则无法区分 backbone 长序
 2. 将 clean commit 和代码仓库部署到云端；只预下载当前 YAML 固定的数据、encoder 和 tokenizer，
    不上传历史 checkpoint 或 baseline 产物。
 3. 按 [`CLOUD_PHASE1_RUNBOOK.md`](CLOUD_PHASE1_RUNBOOK.md) 完成 profile、preflight、
-   短程 smoke，再启动正式 60K Phase 1。
+   短程 smoke，再启动正式 30K Phase 1。
 4. Phase 1 工程验收后立即进入 Phase 2 OWT，不继续扩展 WMT14。

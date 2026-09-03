@@ -1,4 +1,4 @@
-# Phase 1 cloud pair: WONN-L12/K768/T3, from scratch to 60K.
+# Phase 1 cloud pair: WONN-L12/K768/T3, from scratch to 30K.
 data_path: "embedded-language-flows/wmt14_de-en_train_t5"
 eval_data_path: "embedded-language-flows/wmt14_de-en_validation_t5"
 data_revision: "aee21115965ee2b9d3d6d02ec2a72f4f998476d9"
@@ -42,7 +42,7 @@ epochs: 1
 global_batch_size: 24
 batch_size: null
 grad_accum_steps: 1
-max_optimizer_steps: 60000
+max_optimizer_steps: 30000
 blr: 0.001
 lr: 0.0005
 lr_schedule: constant
@@ -59,7 +59,7 @@ online_eval: true
 use_compile: false
 
 log_freq: 100
-save_optimizer_steps: "5000,10000,20000,40000,60000"
+save_optimizer_steps: "10000,20000,25000,30000"
 save_freq: 100
 eval_freq: 100
 final_eval: false

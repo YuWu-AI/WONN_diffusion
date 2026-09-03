@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Validate and summarize the 50K/60K four-GPU ELF/WONN cloud pair."""
+"""Validate and summarize the 30K four-GPU ELF/WONN cloud pair."""
 
 import argparse
 import csv
@@ -14,10 +14,9 @@ import sacrebleu
 import yaml
 
 CHECKPOINT_STEPS = {
-    50000: (5000, 10000, 20000, 40000, 50000),
-    60000: (5000, 10000, 20000, 40000, 60000),
+    30000: (10000, 20000, 25000, 30000),
 }
-EXPECTED_STEPS = CHECKPOINT_STEPS[60000]
+EXPECTED_STEPS = CHECKPOINT_STEPS[30000]
 EXPECTED_SAMPLES = 500
 ELF_LABEL = "Transformer ELF-B"
 WONN_LABEL = "WONN-L12K768T3"
@@ -162,15 +161,15 @@ def validate_pair_configs(
     wonn_config_path: Path,
     effective_batch: int | None = None,
     world_size: int = 2,
-    target_steps: int = 60000,
+    target_steps: int = 30000,
 ) -> dict:
     if world_size != 2:
         raise ValueError("cloud pair world_size must be 2")
     if target_steps not in CHECKPOINT_STEPS:
-        raise ValueError("target steps must be 50000 or 60000")
+        raise ValueError("target steps must be 30000")
     elf = _load_yaml(elf_config_path)
     wonn = _load_yaml(wonn_config_path)
-    default_save_steps = ",".join(str(step) for step in CHECKPOINT_STEPS[60000])
+    default_save_steps = ",".join(str(step) for step in CHECKPOINT_STEPS[30000])
     selected_steps = CHECKPOINT_STEPS[target_steps]
 
     for label, config, expected_model in (
@@ -179,8 +178,8 @@ def validate_pair_configs(
     ):
         if config.get("model") != expected_model:
             raise ValueError(f"{label} config has model={config.get('model')!r}")
-        if config.get("max_optimizer_steps") != 60000:
-            raise ValueError(f"{label} must train to exactly 60000 optimizer steps")
+        if config.get("max_optimizer_steps") != 30000:
+            raise ValueError(f"{label} must train to exactly 30000 optimizer steps")
         if config.get("save_optimizer_steps") != default_save_steps:
             raise ValueError(f"{label} has the wrong default checkpoint schedule")
         if config.get("grad_accum_steps") != 1:
@@ -408,7 +407,7 @@ def analyze_pair(
 
     targets = {config.get("max_optimizer_steps") for config in configs.values()}
     if len(targets) != 1 or next(iter(targets)) not in CHECKPOINT_STEPS:
-        raise ValueError("resolved configs must share a 50000 or 60000 target")
+        raise ValueError("resolved configs must share the 30000 target")
     target_steps = targets.pop()
     checkpoint_steps = CHECKPOINT_STEPS[target_steps]
     expected_save_steps = ",".join(str(step) for step in checkpoint_steps)
@@ -604,7 +603,7 @@ def analyze_pair(
     _write_json(output_dir / "comparison.json", payload)
     markdown = [
         f"# WMT14 {target_steps // 1000}K cloud pair\n\n",
-        f"Both models use effective batch {effective_batch}, seed 42, and the same five checkpoints.\n\n",
+        f"Both models use effective batch {effective_batch}, seed 42, and the same four checkpoints.\n\n",
         "| Model | BLEU | chrF++ | TER | Empty % | Unique % | Length ratio |\n",
         "|---|---:|---:|---:|---:|---:|---:|\n",
     ]
@@ -628,7 +627,7 @@ def main() -> None:
     validate.add_argument("--wonn-config", type=Path, required=True)
     validate.add_argument("--effective-batch", type=int)
     validate.add_argument("--world-size", type=int, required=True)
-    validate.add_argument("--target-steps", type=int, default=60000)
+    validate.add_argument("--target-steps", type=int, default=30000)
     validate.add_argument("--output", type=Path)
     analyze = subparsers.add_parser("analyze")
     analyze.add_argument("--elf-run-dir", type=Path, required=True)

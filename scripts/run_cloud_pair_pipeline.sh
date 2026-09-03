@@ -10,7 +10,7 @@ layout="${DLM_WONN_GPU_LAYOUT:-2+2}"
 effective_batch="${DLM_WONN_GLOBAL_BATCH_SIZE:-24}"
 eval_batch="${DLM_WONN_EVAL_BATCH_SIZE:-16}"
 eval_samples="${DLM_WONN_EVAL_SAMPLES:-500}"
-target_steps="${DLM_WONN_TARGET_STEPS:-60000}"
+target_steps="${DLM_WONN_TARGET_STEPS:-30000}"
 learning_rate="0.0005"
 warmup_steps="3000"
 elf_gpus="${DLM_WONN_ELF_GPUS:-0,1}"
@@ -23,9 +23,8 @@ wonn_run="$run_root/wonn"
 analysis_dir="$run_root/analysis"
 status_path="$run_root/pipeline_status.json"
 case "$target_steps" in
-    60000) steps=(5000 10000 20000 40000 60000) ;;
-    50000) steps=(5000 10000 20000 40000 50000) ;;
-    *) printf '[cloud-pair] ERROR: DLM_WONN_TARGET_STEPS must be 60000 or 50000\n' >&2; exit 1 ;;
+    30000) steps=(10000 20000 25000 30000) ;;
+    *) printf '[cloud-pair] ERROR: DLM_WONN_TARGET_STEPS must be 30000\n' >&2; exit 1 ;;
 esac
 checkpoint_csv="$(IFS=,; printf '%s' "${steps[*]}")"
 ELF_LABEL="Transformer ELF-B"
