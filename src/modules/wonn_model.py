@@ -231,16 +231,21 @@ class WONNELF(nn.Module):
     def _initialize_states(
         self, hidden: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        hidden = self.adapter_norm(hidden)
-        phase_pairs = self.phase_projection(hidden).reshape(
-            *hidden.shape[:-1], self.num_oscillators, 2
-        )
-        pair_norm = torch.rsqrt(
-            phase_pairs.float().square().sum(dim=-1, keepdim=True) + 1e-6
-        ).to(phase_pairs.dtype)
-        phase_pairs = phase_pairs * pair_norm
-        theta = torch.atan2(phase_pairs[..., 1], phase_pairs[..., 0])
-        omega = self.frequency_projection(hidden)
+        # Keep the polar conversion in fp32. Under BF16 autocast, rare
+        # near-zero projected pairs can lose enough precision for atan2's
+        # backward denominator to become non-finite even though the forward
+        # phase and the final loss are finite.
+        with torch.amp.autocast("cuda", enabled=False):
+            hidden_f32 = self.adapter_norm(hidden.float())
+            phase_pairs = self.phase_projection(hidden_f32).reshape(
+                *hidden_f32.shape[:-1], self.num_oscillators, 2
+            )
+            pair_norm = torch.rsqrt(
+                phase_pairs.square().sum(dim=-1, keepdim=True) + 1e-6
+            )
+            phase_pairs = phase_pairs * pair_norm
+            theta = torch.atan2(phase_pairs[..., 1], phase_pairs[..., 0])
+            omega = self.frequency_projection(hidden_f32)
         return theta, omega
 
     def _run_dynamics(
