@@ -479,8 +479,15 @@ def analyze_pair(
     ):
         raise ValueError("resolved WONN config is not L12/K768/T3/H12")
     for label in (ELF_LABEL, WONN_LABEL):
-        if configs[label].get("resume") is not None or configs[label].get("init_from") is not None:
-            raise ValueError(f"{label} resolved config is not from scratch")
+        if configs[label].get("init_from") is not None:
+            raise ValueError(f"{label} resolved config uses a warm start")
+        resume = configs[label].get("resume")
+        run_dir = elf_run_dir if label == ELF_LABEL else wonn_run_dir
+        if resume is not None:
+            if Path(resume).resolve() != run_dir.resolve():
+                raise ValueError(f"{label} resumed from outside its run directory")
+            if not (run_dir / "training_resumed.json").is_file():
+                raise ValueError(f"{label} lacks evidence for its in-place resume")
         if completions[label].get("samples_seen") != target_steps * effective_batch:
             raise ValueError(f"{label} completion marker has the wrong samples_seen")
         if completions[label].get("batch_size_per_device") != configs[label].get("batch_size"):

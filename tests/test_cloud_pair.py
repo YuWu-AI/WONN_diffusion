@@ -166,6 +166,11 @@ class CloudPairAnalysisTest(unittest.TestCase):
                     "model": model,
                     "save_optimizer_steps": ",".join(str(step) for step in model_steps),
                 }
+                if label == ELF_LABEL:
+                    config["resume"] = str(run_dir)
+                    (run_dir / "training_resumed.json").write_text(
+                        json.dumps({"resume_train_step": 10000}), encoding="utf-8",
+                    )
                 if model == "ELF-WONN-B":
                     config.update({
                         "wonn_num_layers": 12,
