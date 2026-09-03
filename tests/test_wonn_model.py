@@ -14,6 +14,18 @@ from modules.model_factory import build_model
 
 
 class WONNModelTest(unittest.TestCase):
+    def test_zero_hidden_phase_initialization_has_finite_backward(self):
+        model = make_tiny_wonn()
+        hidden = torch.zeros(
+            2, 6, model.hidden_size, requires_grad=True,
+        )
+        theta, omega = model._initialize_states(hidden)
+        loss = theta.square().mean() + omega.square().mean()
+        loss.backward()
+        self.assertTrue(torch.isfinite(theta).all())
+        self.assertTrue(torch.isfinite(hidden.grad).all())
+        self.assertTrue(torch.isfinite(model.phase_projection.weight.grad).all())
+
     def setUp(self):
         torch.manual_seed(41)
         self.x = torch.randn(2, 6, 16)
