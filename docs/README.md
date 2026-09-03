@@ -7,7 +7,7 @@
 | 文档 | 状态 | 用途 |
 | --- | --- | --- |
 | [`RESEARCH_PLAN.md`](RESEARCH_PLAN.md) | 权威计划 | Phase 1–3 的研究问题、顺序和 gate |
-| [`CLOUD_PHASE1_RUNBOOK.md`](CLOUD_PHASE1_RUNBOOK.md) | 当前运行手册 | 4-GPU、30K ELF/WONN 配对实验 |
+| [`CLOUD_PHASE1_RUNBOOK.md`](CLOUD_PHASE1_RUNBOOK.md) | 当前运行手册 | 4-GPU、20K ELF/WONN 配对实验 |
 | [`PROJECT_STRUCTURE.md`](PROJECT_STRUCTURE.md) | 当前索引 | 代码、配置、脚本和产物边界 |
 | [`ENVIRONMENT.md`](ENVIRONMENT.md) | 历史环境快照 | 2026-08-06 本机已验证环境；硬件状态需实时复核 |
 | [`ELF_UPSTREAM_README.md`](ELF_UPSTREAM_README.md) | 固定上游快照 | ELF `b29d883` 的官方 PyTorch 用法 |

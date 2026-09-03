@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Validate and summarize the 30K four-GPU ELF/WONN cloud pair."""
+"""Validate and summarize the 20K four-GPU ELF/WONN cloud pair."""
 
 import argparse
 import csv
@@ -13,13 +13,16 @@ import numpy as np
 import sacrebleu
 import yaml
 
-CHECKPOINT_STEPS = {
-    30000: (10000, 20000, 25000, 30000),
-}
-EXPECTED_STEPS = CHECKPOINT_STEPS[30000]
-EXPECTED_SAMPLES = 500
 ELF_LABEL = "Transformer ELF-B"
 WONN_LABEL = "WONN-L12K768T3"
+CHECKPOINT_STEPS = {
+    20000: {
+        ELF_LABEL: (10000, 15000, 20000),
+        WONN_LABEL: (5000, 10000, 15000, 20000),
+    },
+}
+EXPECTED_STEPS = CHECKPOINT_STEPS[20000]
+EXPECTED_SAMPLES = 500
 
 
 def _read_json(path: Path) -> dict:
@@ -161,15 +164,15 @@ def validate_pair_configs(
     wonn_config_path: Path,
     effective_batch: int | None = None,
     world_size: int = 2,
-    target_steps: int = 30000,
+    target_steps: int = 20000,
 ) -> dict:
     if world_size != 2:
         raise ValueError("cloud pair world_size must be 2")
     if target_steps not in CHECKPOINT_STEPS:
-        raise ValueError("target steps must be 30000")
+        raise ValueError("target steps must be 20000")
     elf = _load_yaml(elf_config_path)
     wonn = _load_yaml(wonn_config_path)
-    default_save_steps = ",".join(str(step) for step in CHECKPOINT_STEPS[30000])
+    default_save_steps = "5000,10000,15000,20000"
     selected_steps = CHECKPOINT_STEPS[target_steps]
 
     for label, config, expected_model in (
@@ -178,8 +181,8 @@ def validate_pair_configs(
     ):
         if config.get("model") != expected_model:
             raise ValueError(f"{label} config has model={config.get('model')!r}")
-        if config.get("max_optimizer_steps") != 30000:
-            raise ValueError(f"{label} must train to exactly 30000 optimizer steps")
+        if config.get("max_optimizer_steps") != 20000:
+            raise ValueError(f"{label} must train to exactly 20000 optimizer steps")
         if config.get("save_optimizer_steps") != default_save_steps:
             raise ValueError(f"{label} has the wrong default checkpoint schedule")
         if config.get("grad_accum_steps") != 1:
@@ -244,7 +247,9 @@ def validate_pair_configs(
     return {
         "status": "valid",
         "terminal_optimizer_step": target_steps,
-        "checkpoint_steps": list(selected_steps),
+        "checkpoint_steps": {
+            label: list(selected_steps[label]) for label in (ELF_LABEL, WONN_LABEL)
+        },
         "world_size_per_model": world_size,
         "effective_batch_size": effective_batch,
         "batch_size_per_device": effective_batch // world_size,
@@ -407,17 +412,15 @@ def analyze_pair(
 
     targets = {config.get("max_optimizer_steps") for config in configs.values()}
     if len(targets) != 1 or next(iter(targets)) not in CHECKPOINT_STEPS:
-        raise ValueError("resolved configs must share the 30000 target")
+        raise ValueError("resolved configs must share the 20000 target")
     target_steps = targets.pop()
     checkpoint_steps = CHECKPOINT_STEPS[target_steps]
-    expected_save_steps = ",".join(str(step) for step in checkpoint_steps)
-    if any(
-        config.get("save_optimizer_steps") != expected_save_steps
-        for config in configs.values()
-    ):
-        raise ValueError("resolved configs have the wrong checkpoint schedule")
+    for label in (ELF_LABEL, WONN_LABEL):
+        expected_save_steps = ",".join(str(step) for step in checkpoint_steps[label])
+        if configs[label].get("save_optimizer_steps") != expected_save_steps:
+            raise ValueError(f"{label} resolved config has the wrong checkpoint schedule")
     training = {
-        label: _training_rows(run_dir, checkpoint_steps)
+        label: _training_rows(run_dir, checkpoint_steps[label])
         for label, run_dir, _ in run_specs
     }
     for label in (ELF_LABEL, WONN_LABEL):
@@ -492,7 +495,7 @@ def analyze_pair(
     rows = []
     paired_inputs = {}
     for label, run_dir, _ in run_specs:
-        for step in checkpoint_steps:
+        for step in checkpoint_steps[label]:
             checkpoint = run_dir / f"checkpoint_{step}"
             if not checkpoint.is_file() or checkpoint.stat().st_size == 0:
                 raise FileNotFoundError(f"missing or empty checkpoint {checkpoint}")
@@ -568,7 +571,10 @@ def analyze_pair(
         "completed_at_utc": datetime.now(timezone.utc).isoformat(),
         "comparison_contract": {
             "terminal_optimizer_step": target_steps,
-            "checkpoint_steps": list(checkpoint_steps),
+            "checkpoint_steps": {
+                label: list(checkpoint_steps[label])
+                for label in (ELF_LABEL, WONN_LABEL)
+            },
             "samples_per_model_per_checkpoint": expected_samples,
             "effective_batch_size": effective_batch,
             "seed": configs[ELF_LABEL]["seed"],
@@ -603,7 +609,7 @@ def analyze_pair(
     _write_json(output_dir / "comparison.json", payload)
     markdown = [
         f"# WMT14 {target_steps // 1000}K cloud pair\n\n",
-        f"Both models use effective batch {effective_batch}, seed 42, and the same four checkpoints.\n\n",
+        f"Both models use effective batch {effective_batch} and seed 42; ELF lacks the already-passed 5K checkpoint.\n\n",
         "| Model | BLEU | chrF++ | TER | Empty % | Unique % | Length ratio |\n",
         "|---|---:|---:|---:|---:|---:|---:|\n",
     ]
@@ -627,7 +633,7 @@ def main() -> None:
     validate.add_argument("--wonn-config", type=Path, required=True)
     validate.add_argument("--effective-batch", type=int)
     validate.add_argument("--world-size", type=int, required=True)
-    validate.add_argument("--target-steps", type=int, default=30000)
+    validate.add_argument("--target-steps", type=int, default=20000)
     validate.add_argument("--output", type=Path)
     analyze = subparsers.add_parser("analyze")
     analyze.add_argument("--elf-run-dir", type=Path, required=True)

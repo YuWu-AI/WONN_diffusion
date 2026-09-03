@@ -1,4 +1,4 @@
-# Phase 1：4-GPU、30K 云端配对实验运行手册
+# Phase 1：4-GPU、20K 云端配对实验运行手册
 
 > 状态：代码已实现，尚未在目标 4-GPU 云主机完成 CUDA smoke 或正式训练。
 > 本文是当前 WMT14 工程实验的唯一运行口径；历史 50K/90K/130K 流水线不属于本轮输入。
@@ -9,10 +9,11 @@
 
 - 从同一 clean commit、同一 seed 和同一数据 revision 随机初始化 ELF-B 与
   WONN-L12/K768/T3；
-- 两个模型均训练到 `30000` optimizer steps；
+- 两个模型均训练到 `20000` optimizer steps；
 - 两边固定 global batch 24（每卡 12）、学习率 `5e-4`、warmup 3000、seed 42；
-- 两边都保存 `10K, 20K, 25K, 30K`；
-- 每个 checkpoint 使用同一批 500 个验证样本，共 8 次评测；
+- WONN 保存 `5K, 10K, 15K, 20K`；ELF 本次运行已越过 5K，因此保留
+  `10K, 15K, 20K`；
+- 每个现存 checkpoint 使用同一批 500 个验证样本，共 7 次评测；
 - 生成 `comparison.json`、`metrics_by_checkpoint.csv`、`comparison.md` 和一张
   `quality_curves.svg` 复合折线图；
 - `pipeline_complete.json` 存在且内容通过产物校验。
@@ -26,8 +27,8 @@ steps 与 samples seen。
 - 不使用本地历史 checkpoint、warm start、训练指标或生成结果。
 - 不修改 ELF encoder、Flow Matching、conditioning、sampler 或 shared decoder。
 - 不覆盖官方 ELF 配置或历史输出目录。
-- 同一次 run 恢复时不得改变 commit、GPU 布局、world size、有效 batch、学习率、warmup、目标
-  step、checkpoint 列表或评测口径。
+- 除 2026-09-03 用户明确将运行从 30K 缩短到 20K 的一次性迁移外，同一次 run 恢复时不得改变
+  commit、GPU 布局、world size、有效 batch、学习率、warmup、目标 step、checkpoint 列表或评测口径。
 - 正式训练只允许写入持久卷中的新目录。
 
 当前配置：
@@ -100,14 +101,14 @@ batch 24、lr `5e-4`、warmup 3000。先运行到约 100 step 并保存 checkpoi
 约 200 step。记录两边稳定后的 seconds/step、samples/second、峰值显存，并验证 loss/梯度/参数
 有限、DDP 正常退出、无 NCCL hang、checkpoint 可加载且恢复后的 step/metrics 连续。
 
-不搜索其他 batch、学习率、scheduler 或 GPU 布局。正式预算固定为 30K；smoke 吞吐仅用于报告
+不搜索其他 batch、学习率、scheduler 或 GPU 布局。正式预算固定为 20K；smoke 吞吐仅用于报告
 预计墙钟时间，不再决定 50K/60K 分支。运行配置检查：
 
 ```bash
 $DLM_WONN_PYTHON scripts/analyze_cloud_pair.py validate-configs \
   --elf-config src/configs/training_configs/train_de-en-ELF-B-cloud-60k.yml \
   --wonn-config src/configs/training_configs/train_de-en-WONN-L12K768T3-cloud-60k.yml \
-  --effective-batch 24 --world-size 2 --target-steps 30000
+  --effective-batch 24 --world-size 2 --target-steps 20000
 ```
 两份配置必须使用相同的固定 `lr=0.0005`。
 
@@ -117,9 +118,9 @@ $DLM_WONN_PYTHON scripts/analyze_cloud_pair.py validate-configs \
 
 ```bash
 export DLM_WONN_PYTHON=/opt/dlm-wonn-venv/bin/python
-export DLM_WONN_TARGET_STEPS=30000
+export DLM_WONN_TARGET_STEPS=20000
 commit_short="$(git rev-parse --short=7 HEAD)"
-export DLM_WONN_PAIR_RUN_ROOT="/root/shared-nvme/dlm-wonn/runs/wmt14-pair-${commit_short}-30000"
+export DLM_WONN_PAIR_RUN_ROOT="/root/shared-nvme/dlm-wonn/runs/wmt14-pair-${commit_short}-20000"
 export DLM_WONN_GPU_LAYOUT=2+2
 export DLM_WONN_GLOBAL_BATCH_SIZE=24
 export DLM_WONN_EVAL_SAMPLES=500

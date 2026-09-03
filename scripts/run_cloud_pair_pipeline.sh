@@ -10,7 +10,7 @@ layout="${DLM_WONN_GPU_LAYOUT:-2+2}"
 effective_batch="${DLM_WONN_GLOBAL_BATCH_SIZE:-24}"
 eval_batch="${DLM_WONN_EVAL_BATCH_SIZE:-16}"
 eval_samples="${DLM_WONN_EVAL_SAMPLES:-500}"
-target_steps="${DLM_WONN_TARGET_STEPS:-30000}"
+target_steps="${DLM_WONN_TARGET_STEPS:-20000}"
 learning_rate="0.0005"
 warmup_steps="3000"
 elf_gpus="${DLM_WONN_ELF_GPUS:-0,1}"
@@ -23,10 +23,14 @@ wonn_run="$run_root/wonn"
 analysis_dir="$run_root/analysis"
 status_path="$run_root/pipeline_status.json"
 case "$target_steps" in
-    30000) steps=(10000 20000 25000 30000) ;;
-    *) printf '[cloud-pair] ERROR: DLM_WONN_TARGET_STEPS must be 30000\n' >&2; exit 1 ;;
+    20000)
+        elf_steps=(10000 15000 20000)
+        wonn_steps=(5000 10000 15000 20000)
+        ;;
+    *) printf '[cloud-pair] ERROR: DLM_WONN_TARGET_STEPS must be 20000\n' >&2; exit 1 ;;
 esac
-checkpoint_csv="$(IFS=,; printf '%s' "${steps[*]}")"
+elf_checkpoint_csv="$(IFS=,; printf '%s' "${elf_steps[*]}")"
+wonn_checkpoint_csv="$(IFS=,; printf '%s' "${wonn_steps[*]}")"
 ELF_LABEL="Transformer ELF-B"
 WONN_LABEL="WONN-L12K768T3"
 current_stage="preflight"
@@ -147,7 +151,7 @@ if [ -s "$run_root/provenance/evaluation_contract.txt" ]; then
     [ "$recorded_evaluation_contract" = "$evaluation_contract" ] \
         || die "evaluation contract cannot change while resuming this run"
 fi
-training_contract="target=$target_steps;checkpoints=$checkpoint_csv;batch=$effective_batch;lr=$learning_rate;warmup=$warmup_steps;layout=$layout"
+training_contract="target=$target_steps;elf_checkpoints=$elf_checkpoint_csv;wonn_checkpoints=$wonn_checkpoint_csv;batch=$effective_batch;lr=$learning_rate;warmup=$warmup_steps;layout=$layout"
 if [ -s "$run_root/provenance/training_contract.txt" ]; then
     recorded_training_contract="$(tr -d '\r\n' < "$run_root/provenance/training_contract.txt")"
     [ "$recorded_training_contract" = "$training_contract" ] \
@@ -248,6 +252,7 @@ launch_training() {
     local run_dir="$3"
     local gpu_list="$4"
     local master_port="$5"
+    local save_steps="$6"
     if training_is_complete "$run_dir"; then
         printf '[cloud-pair] %s training already complete\n' "$label"
         TRAIN_PID=""
@@ -272,7 +277,7 @@ launch_training() {
             --config_override "lr=$learning_rate" \
             --config_override "warmup_steps=$warmup_steps" \
             --config_override "max_optimizer_steps=$target_steps" \
-            --config_override "save_optimizer_steps=$checkpoint_csv" \
+            --config_override "save_optimizer_steps=$save_steps" \
             --config_override "num_samples=$eval_samples" \
             --config_override "output_dir=$run_dir"
     ) >> "$run_dir/pipeline.log" 2>&1 &
@@ -282,9 +287,9 @@ launch_training() {
 wait_for_training() {
     local elf_status=0
     local wonn_status=0
-    launch_training ELF "$elf_config" "$elf_run" "$elf_gpus" "$elf_port"
+    launch_training ELF "$elf_config" "$elf_run" "$elf_gpus" "$elf_port" "$elf_checkpoint_csv"
     local elf_pid="$TRAIN_PID"
-    launch_training WONN "$wonn_config" "$wonn_run" "$wonn_gpus" "$wonn_port"
+    launch_training WONN "$wonn_config" "$wonn_run" "$wonn_gpus" "$wonn_port" "$wonn_checkpoint_csv"
     local wonn_pid="$TRAIN_PID"
     if [ -n "$elf_pid" ]; then wait "$elf_pid" || elf_status="$?"; fi
     if [ -n "$wonn_pid" ]; then wait "$wonn_pid" || wonn_status="$?"; fi
@@ -299,11 +304,13 @@ wait_for_training
 
 task_models=()
 task_steps=()
-for model in elf wonn; do
-    for step in "${steps[@]}"; do
-        task_models+=("$model")
-        task_steps+=("$step")
-    done
+for step in "${elf_steps[@]}"; do
+    task_models+=(elf)
+    task_steps+=("$step")
+done
+for step in "${wonn_steps[@]}"; do
+    task_models+=(wonn)
+    task_steps+=("$step")
 done
 
 evaluate_one() {
@@ -392,8 +399,8 @@ analysis_elapsed_seconds="$(( $(date +%s) - analysis_started_epoch ))"
 
 "$python_bin" - "$run_root/pipeline_complete.json" "$experiment_commit" \
     "$layout" "$effective_batch" "$analysis_dir/comparison.json" \
-    "$target_steps" "${#steps[@]}" "$((2 * ${#steps[@]}))" \
-    "$checkpoint_csv" "$learning_rate" "$warmup_steps" \
+    "$target_steps" "${#elf_steps[@]}" "${#wonn_steps[@]}" "${#task_models[@]}" \
+    "$elf_checkpoint_csv" "$wonn_checkpoint_csv" "$learning_rate" "$warmup_steps" \
     "$evaluation_elapsed_seconds" "$analysis_elapsed_seconds" \
     "$(( $(date +%s) - pipeline_started_epoch ))" <<'PY'
 from datetime import datetime, timezone
@@ -410,14 +417,17 @@ payload = {
     "gpu_layout": sys.argv[3],
     "effective_batch_size": int(sys.argv[4]),
     "terminal_optimizer_step": int(sys.argv[6]),
-    "checkpoint_count_per_model": int(sys.argv[7]),
-    "evaluation_count": int(sys.argv[8]),
-    "checkpoint_steps": [int(value) for value in sys.argv[9].split(",")],
-    "learning_rate": float(sys.argv[10]),
-    "warmup_steps": int(sys.argv[11]),
-    "evaluation_elapsed_seconds": int(sys.argv[12]),
-    "analysis_elapsed_seconds": int(sys.argv[13]),
-    "pipeline_elapsed_seconds": int(sys.argv[14]),
+    "checkpoint_counts": {"elf": int(sys.argv[7]), "wonn": int(sys.argv[8])},
+    "evaluation_count": int(sys.argv[9]),
+    "checkpoint_steps": {
+        "elf": [int(value) for value in sys.argv[10].split(",")],
+        "wonn": [int(value) for value in sys.argv[11].split(",")],
+    },
+    "learning_rate": float(sys.argv[12]),
+    "warmup_steps": int(sys.argv[13]),
+    "evaluation_elapsed_seconds": int(sys.argv[14]),
+    "analysis_elapsed_seconds": int(sys.argv[15]),
+    "pipeline_elapsed_seconds": int(sys.argv[16]),
     "analysis": sys.argv[5],
     "quality_chart": str(Path(sys.argv[5]).with_name("quality_curves.svg")),
 }

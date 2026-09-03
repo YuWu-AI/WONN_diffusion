@@ -64,29 +64,31 @@ def _write_evaluation(run_dir: Path, label: str, step: int, hypotheses: list[str
 
 
 class CloudPairConfigTest(unittest.TestCase):
-    def test_configs_are_fair_from_scratch_30k_pair(self):
+    def test_configs_are_fair_from_scratch_20k_pair(self):
         config_root = REPO_ROOT / "src/configs/training_configs"
         payload = validate_pair_configs(
             config_root / "train_de-en-ELF-B-cloud-60k.yml",
             config_root / "train_de-en-WONN-L12K768T3-cloud-60k.yml",
             world_size=2,
         )
-        self.assertEqual(payload["terminal_optimizer_step"], 30000)
-        self.assertEqual(payload["checkpoint_steps"], list(EXPECTED_STEPS))
+        self.assertEqual(payload["terminal_optimizer_step"], 20000)
+        self.assertEqual(payload["checkpoint_steps"], {
+            label: list(EXPECTED_STEPS[label]) for label in (ELF_LABEL, WONN_LABEL)
+        })
         self.assertEqual(payload["effective_batch_size"], 24)
         self.assertEqual(payload["batch_size_per_device"], 12)
         self.assertEqual(payload["learning_rate"], 0.0005)
         self.assertEqual(payload["warmup_steps"], 3000)
 
-    def test_runtime_rejects_a_target_other_than_30k(self):
+    def test_runtime_rejects_a_target_other_than_20k(self):
         config_root = REPO_ROOT / "src/configs/training_configs"
-        with self.assertRaisesRegex(ValueError, "target steps must be 30000"):
+        with self.assertRaisesRegex(ValueError, "target steps must be 20000"):
             validate_pair_configs(
                 config_root / "train_de-en-ELF-B-cloud-60k.yml",
                 config_root / "train_de-en-WONN-L12K768T3-cloud-60k.yml",
                 effective_batch=24,
                 world_size=2,
-                target_steps=50000,
+                target_steps=30000,
             )
 
     def test_four_rank_layout_is_rejected(self):
@@ -105,10 +107,10 @@ class CloudPairConfigTest(unittest.TestCase):
         )
         self.assertIn('layout="${DLM_WONN_GPU_LAYOUT:-2+2}"', pipeline)
         self.assertNotIn("4-serial", pipeline)
-        self.assertIn('target_steps="${DLM_WONN_TARGET_STEPS:-30000}"', pipeline)
+        self.assertIn('target_steps="${DLM_WONN_TARGET_STEPS:-20000}"', pipeline)
         self.assertIn('--config_override "lr=$learning_rate"', pipeline)
         self.assertIn('--config_override "max_optimizer_steps=$target_steps"', pipeline)
-        self.assertIn('--config_override "save_optimizer_steps=$checkpoint_csv"', pipeline)
+        self.assertIn('--config_override "save_optimizer_steps=$save_steps"', pipeline)
         self.assertIn('elf_gpus="${DLM_WONN_ELF_GPUS:-0,1}"', pipeline)
         self.assertIn('wonn_gpus="${DLM_WONN_WONN_GPUS:-2,3}"', pipeline)
         self.assertIn("-m torch.distributed.run", pipeline)
@@ -131,7 +133,7 @@ class CloudPairAnalysisTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "not strictly monotonic"):
                 _training_rows(run_dir, (5,))
 
-    def test_30k_analysis_requires_both_runs_and_writes_one_composite_chart(self):
+    def test_20k_analysis_accepts_missing_elf_5k_and_writes_one_composite_chart(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             common_config = {
@@ -150,8 +152,7 @@ class CloudPairAnalysisTest(unittest.TestCase):
                 "tokenizer_revision": "tokenizer-revision",
                 "sampling_configs_path": "sampling.yml",
                 "num_samples": 500,
-                "max_optimizer_steps": 30000,
-                "save_optimizer_steps": "10000,20000,25000,30000",
+                "max_optimizer_steps": 20000,
             }
             specs = (
                 (ELF_LABEL, root / "elf", "ELF-B"),
@@ -159,7 +160,12 @@ class CloudPairAnalysisTest(unittest.TestCase):
             )
             for label, run_dir, model in specs:
                 run_dir.mkdir()
-                config = {**common_config, "model": model}
+                model_steps = CHECKPOINT_STEPS[20000][label]
+                config = {
+                    **common_config,
+                    "model": model,
+                    "save_optimizer_steps": ",".join(str(step) for step in model_steps),
+                }
                 if model == "ELF-WONN-B":
                     config.update({
                         "wonn_num_layers": 12,
@@ -172,9 +178,9 @@ class CloudPairAnalysisTest(unittest.TestCase):
                 )
                 (run_dir / "training_complete.json").write_text(json.dumps({
                     "status": "complete",
-                    "completed_optimizer_step": 30000,
+                    "completed_optimizer_step": 20000,
                     "effective_batch_size": 24,
-                    "samples_seen": 30000 * 24,
+                    "samples_seen": 20000 * 24,
                     "world_size": 2,
                     "batch_size_per_device": 12,
                     "learning_rate": 0.0005,
@@ -184,7 +190,7 @@ class CloudPairAnalysisTest(unittest.TestCase):
                     "peak_allocated_cuda_mib": 200.0,
                 }), encoding="utf-8")
                 training_rows = []
-                for step in CHECKPOINT_STEPS[30000]:
+                for step in model_steps:
                     (run_dir / f"checkpoint_{step}").write_bytes(b"checkpoint")
                     training_rows.append({
                         "optimizer_step": step,
@@ -209,9 +215,9 @@ class CloudPairAnalysisTest(unittest.TestCase):
             payload = analyze_pair(root / "elf", root / "wonn", output, 4)
             self.assertEqual(payload["status"], "complete")
             self.assertEqual(
-                payload["comparison_contract"]["terminal_optimizer_step"], 30000,
+                payload["comparison_contract"]["terminal_optimizer_step"], 20000,
             )
-            self.assertEqual(len(payload["metrics_by_checkpoint"]), 8)
+            self.assertEqual(len(payload["metrics_by_checkpoint"]), 7)
             self.assertTrue((output / "comparison.json").is_file())
             self.assertTrue((output / "metrics_by_checkpoint.csv").is_file())
             chart = (output / "quality_curves.svg").read_text(encoding="utf-8")
