@@ -65,14 +65,21 @@ def save_checkpoint(state, output_dir: str, step: int, hf_repo_id: str = None):
         "opt_state": state.optimizer.state_dict(),
         "lr_scheduler": state.lr_scheduler.state_dict() if state.lr_scheduler is not None else None,
         "step": int(state.step),
+        "checkpoint_step": int(step),
         "epoch": float(state.epoch),
         "dropout_rng": (state.dropout_generator.get_state()
                         if state.dropout_generator is not None else None),
         "grad_accum_buffers": grad_accum_buffers,
     }
     out_path = os.path.join(ckpt_dir, f"checkpoint_{step}")
+    temporary_path = os.path.join(ckpt_dir, f".checkpoint_{step}.tmp")
     log_for_0(f"Saving checkpoint to {out_path}")
-    torch.save(payload, out_path)
+    try:
+        torch.save(payload, temporary_path)
+        os.replace(temporary_path, out_path)
+    finally:
+        if os.path.exists(temporary_path):
+            os.remove(temporary_path)
     log_for_0(f"Checkpoint written to {out_path}")
     upload_output_dir_to_hf(output_dir, hf_repo_id, reason="checkpoint")
 
@@ -183,6 +190,14 @@ def load_checkpoint(checkpoint_path: str, state) -> Tuple[Any, int]:
         raise ValueError(
             f"Failed to load checkpoint from {checkpoint_path}. Tried: {'; '.join(errors)}"
         )
+
+    if os.path.isfile(local_path) and ckpt.get("checkpoint_step") is not None:
+        filename_step = _checkpoint_step(os.path.basename(local_path))
+        if filename_step >= 0 and int(ckpt["checkpoint_step"]) != filename_step:
+            raise ValueError(
+                f"checkpoint label mismatch: filename={filename_step}, "
+                f"payload={ckpt['checkpoint_step']}"
+            )
 
     log_for_0(f"Loaded checkpoint keys: {list(ckpt.keys())}")
 

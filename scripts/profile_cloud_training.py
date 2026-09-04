@@ -15,7 +15,7 @@ from transformers import AutoTokenizer
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-# Phase 5 inputs are pinned and pre-cached before profiling. Avoid network
+# Formal inputs are pinned and pre-cached before profiling. Avoid network
 # probes contaminating setup time or making an otherwise local run flaky.
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
@@ -64,7 +64,7 @@ def _next_batch(iterator, dataloader):
 def main() -> int:
     args = parse_args()
     if not torch.cuda.is_available():
-        print("Phase 5 profiling requires a visible CUDA device.", file=sys.stderr)
+        print("Cloud profiling requires a visible CUDA device.", file=sys.stderr)
         return 2
     if not 0.0 <= args.decoder_prob <= 1.0:
         raise ValueError("decoder-prob must be in [0, 1]")

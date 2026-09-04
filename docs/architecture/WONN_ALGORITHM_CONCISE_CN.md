@@ -4,15 +4,15 @@
 
 ## 0. 量与维度
 
-| 量 | 维度 | Phase 5 正式配置 |
+| 量 | 维度 | 当前四模型矩阵 |
 |---|---:|---:|
 | $\mathbf S$；$\mathbf X_0,\mathbf Z_t,\widehat{\mathbf X}_0$ | $B\times M$；$B\times M\times D$ | $M=128,D=512$ |
-| $\boldsymbol\Theta,\boldsymbol\Omega$ | $B\times N\times K$ | $K=384$ |
+| $\boldsymbol\Theta,\boldsymbol\Omega$ | $B\times N\times K$ | $K=768$ |
 | $\mathbf S_\theta,\mathbf I_\theta,\mathbf F$ | $B\times N\times K$ | sensitivity / influence / field |
-| $\mathbf Q,\mathbf K_a,\mathbf V_a$ | $B\times A\times N\times C$ | $A=12,C=K/A=32$ |
+| $\mathbf Q,\mathbf K_a,\mathbf V_a$ | $B\times A\times N\times C$ | $A=12,C=K/A=64$ |
 | $\mathbf A_{\rm attn}$ | $B\times A\times N\times N$ | attention |
 | control / total length | $P,N$ | $P=12,N=M+P=140$ |
-| layers / inner steps | $L,T$ | $L=6,T=3$ |
+| layers / inner steps | $L,T$ | $L\in\{6,9,12\},T=3$ |
 
 $\mathbf c\in\{0,1\}^{B\times M\times1}$ 为 source mask，且
 
@@ -127,7 +127,8 @@ $$
 \end{aligned}
 $$
 
-一次 forward：$LT=18$ 次 coupling，$L-1=5$ 次 frequency transition。
+一次 forward 执行 $LT$ 次 coupling 和 $L-1$ 次 frequency transition：L6 为 18/5，
+L9 为 27/8，L12 为 36/11。
 
 ### 1.4 phase → clean latent → Flow Matching loss
 
@@ -223,7 +224,7 @@ $$
 \xrightarrow{\rm decoder}\widehat{\mathbf S}}
 $$
 
-口径：公式对任意层数、振子数和 inner steps 成立；当前云端配对使用 $L=12$、$K=768$、$T=3$，
+口径：公式对任意层数、振子数和 inner steps 成立；当前云端矩阵使用 $L\in\{6,9,12\}$、$K=768$、$T=3$，
 基础 WONN YAML 使用 $L=6$、$K=384$、$T=2$。
 
 实现：src/modules/wonn_model.py；src/modules/wonn_layers.py；src/train_step.py；

@@ -78,9 +78,9 @@ ELF 仍在预训练语言模型的 contextual embedding space 中执行 Flow Mat
 - `src/modules/model_factory.py`：ELF/WONN 公共构造入口；
 - `src/configs/training_configs/`：官方 ELF YAML 与独立 WONN YAML。
 
-当前正式 `ELF-WONN-B` 为 384 oscillators、6 layers、每层 2 个 inner steps、12 个 coupling
-heads。每个 attention head 的维度固定为 `384 / 12 = 32`。独立 `OmegaTransition` 只存在于
-相邻层之间，最后一层后不创建无输出作用的参数；当前参数量为 `26,252,399`。
+基础 `train_de-en_ELF-WONN-B.yml` 为 384 oscillators、6 layers、每层 2 个 inner steps、
+12 个 coupling heads，参数量 `26,252,399`。当前架构筛选另用 K768/T3 的 L6、L9、L12
+独立配置；`OmegaTransition` 始终只存在于相邻层之间，最后一层后不创建无输出作用的参数。
 
 每层先用逐振子 S/I MLP 计算 sensitivity 与 influence，再由 influence 经过完整
 `W_qkv -> attention -> head merge -> W_o -> RMSNorm -> ReLU` 产生 coupling field。
@@ -177,8 +177,8 @@ phase features 读取，以避免绕过 oscillator dynamics。
 | `README.md` | 快速开始与代码导航 |
 | `docs/README.md` | 文档状态、分类与阅读顺序 |
 | `docs/RESEARCH_PLAN.md` | 新 Phase 1–3、当前代码进度和云端执行门槛 |
-| `docs/PROJECT_STRUCTURE.md` | 代码分层、Phase 5 脚本/配置和本地数据索引 |
-| `docs/CLOUD_PHASE1_RUNBOOK.md` | 当前 4-GPU、20K 云端配对运行口径 |
+| `docs/PROJECT_STRUCTURE.md` | 代码分层、当前脚本/配置和历史数据索引 |
+| `docs/CLOUD_PHASE1_RUNBOOK.md` | 当前 4-GPU、四模型、100K 运行口径 |
 | `docs/ENVIRONMENT.md` | 已验证本机环境与依赖快照 |
 | `docs/ELF_UPSTREAM_README.md` | ELF 官方 PyTorch 命令与参考指标 |
 | `src/modules/` | ELF 与 WONN 正式模型实现 |
@@ -186,6 +186,5 @@ phase features 读取，以避免绕过 oscillator dynamics。
 | `references/` | 只读上游参考实现 |
 
 当前 `main` 保留 optimizer-step 训练预算、checkpoint/resume、独立评测和产物校验等公共能力，
-并以 4-GPU、20K 配对流水线作为 Phase 1 的唯一 WMT14 入口。旧 50K/60K/90K/130K、机制消融和
-本地后台脚本已从当前目录移除，可从 Git 历史追溯；旧 Phase 5 产物仍只是历史诊断数据，不自动
-升级为新研究计划的正式结论。
+并以 4-GPU、100K 四模型矩阵作为当前唯一 WMT14 入口。旧 pair、50K/60K/90K/130K、机制消融和
+本地后台脚本已从当前目录移除，可从 Git 历史追溯；旧 Phase 5 产物仍只是历史诊断数据。

@@ -2,7 +2,7 @@
 
 下面按照一次 denoising forward 的实际顺序展开。$B$ 是 batch size，$M$ 是
 source 与 target 拼接后的序列长度，$D$ 是 T5 latent 维度，$K$ 是每个 token 的
-振子数。Phase 5 正式实验中，$M=128$、$D=512$、$K=384$。
+振子数。当前四模型矩阵中，$M=128$、$D=512$、$K=768$。
 
 ## 1. 构造带噪 latent
 
@@ -98,7 +98,7 @@ $$
 
 $\operatorname{MLP}_{S,k}$ 与 $\operatorname{MLP}_{I,k}$ 是第 $k$ 个振子的独立网络，结构分别为
 $2\to2\to1$ 和 $2\to4\to1$，中间使用 ReLU，输出不加 $\tanh$。$H$ 是 head 数，
-$C=K/H$ 同时是每个 head 的振子数和 Q/K/V 维度；正式配置为 $H=12$、$C=32$。
+$C=K/H$ 同时是每个 head 的振子数和 Q/K/V 维度；当前矩阵为 $H=12$、$C=64$。
 $\mathbf W_{qkv}\in\mathbb R^{K\times3K}$，$\mathbf W_o\in\mathbb R^{K\times K}$。
 padding mask 只屏蔽 key 位置；普通路径使用 SDPA，只有 diagnostics 显式计算 $\mathbf A$。
 $\mathbf F$ 不包含 influence residual、phase residual 或 Transformer FFN。
@@ -142,8 +142,8 @@ $\operatorname{ThetaEmbedding}$ 对每个振子独立执行 $2\to1$ 仿射映射
 $\mathbf W_1^{(\ell)}\in\mathbb R^{2K\times K}$，
 $\mathbf W_2^{(\ell)}\in\mathbb R^{K\times K}$。$\alpha_\ell$ 初值为 $0.1$，上界为 $0.25$。
 transition 不使用第二套 attention、卷积、末端 $\tanh$ 或零初始化 gate。
-正式模型共有 $L=6$ 层、每层 $T=3$ 步，因此执行 18 次 coupling 和 5 次层间
-frequency update；最后一层不再更新 frequency。
+当前矩阵使用 $L\in\{6,9,12\}$、每层 $T=3$ 步，因此分别执行 18/27/36 次 coupling 和
+5/8/11 次层间 frequency update；最后一层不再更新 frequency。
 
 ## 5. 输出 clean latent 并计算 loss
 

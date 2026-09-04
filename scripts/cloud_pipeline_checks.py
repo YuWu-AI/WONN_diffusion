@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Artifact and lifecycle checks for the resumable cloud pair pipeline."""
+"""Artifact and lifecycle checks for resumable cloud pipelines."""
 
 import argparse
 from datetime import datetime, timezone

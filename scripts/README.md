@@ -8,8 +8,8 @@
 | `bootstrap_cloud_env.sh` | 在 Ubuntu 云实例构建固定 Python 环境 |
 | `verify_cloud_env.sh` | 验证 clean checkout、依赖、4 张 GPU、BF16 和 compile |
 | `profile_cloud_training.py` | 固定配置 smoke 的单模型显存与吞吐测量工具 |
-| `run_cloud_pair_pipeline.sh` | 4-GPU 2+2、20K 配对训练、7 次评测和分析 |
-| `analyze_cloud_pair.py` | 配置公平性校验与最终复合折线图 |
+| `run_cloud_matrix_pipeline.sh` | 四张 GPU 各跑一个模型，完成 100K 训练、28 次评测和分析 |
+| `analyze_cloud_matrix.py` | 校验四模型配置与产物，生成指标表和复合折线图 |
 | `cloud_pipeline_checks.py` | checkpoint、评测和流水线状态校验 |
 
 当前运行口径只以 `docs/CLOUD_PHASE1_RUNBOOK.md` 为准。

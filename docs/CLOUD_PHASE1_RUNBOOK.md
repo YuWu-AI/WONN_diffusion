@@ -1,77 +1,56 @@
-# Phase 1：4-GPU、20K 云端配对实验运行手册
+# Phase 1：4-GPU、四模型、100K 云端运行手册
 
-> 状态：代码已实现，尚未在目标 4-GPU 云主机完成 CUDA smoke 或正式训练。
-> 本文是当前 WMT14 工程实验的唯一运行口径；历史 50K/90K/130K 流水线不属于本轮输入。
+> 本文是当前 WMT14 实验的唯一运行口径。旧 pair 和小 batch 流水线只从 Git 历史追溯。
 
 ## 1. 完成定义
 
 一次正式运行必须同时满足：
 
-- 从同一 clean commit、同一 seed 和同一数据 revision 随机初始化 ELF-B 与
-  WONN-L12/K768/T3；
-- 两个模型均训练到 `20000` optimizer steps；
-- 两边固定 global batch 24（每卡 12）、学习率 `5e-4`、warmup 3000、seed 42；
-- WONN 保存 `5K, 10K, 15K, 20K`；ELF 本次运行已越过 5K，因此保留
-  `10K, 15K, 20K`；
-- 每个现存 checkpoint 使用同一批 500 个验证样本，共 7 次评测；
-- 生成 `comparison.json`、`metrics_by_checkpoint.csv`、`comparison.md` 和一张
-  `quality_curves.svg` 复合折线图；
-- `pipeline_complete.json` 存在且内容通过产物校验。
+- E0/W0/W1/W2 来自同一 clean commit，并从随机初始化开始；
+- GPU 0/1/2/3 各训练一个单进程模型，不使用 DDP；
+- 每组训练到 100K optimizer steps，effective batch 512，warmup 5K optimizer steps；
+- E0 学习率 `2e-3`，三组 WONN 学习率 `1e-3`，均为 constant schedule；
+- 四组均保存 5K、10K、25K、40K、60K、80K、100K；
+- 每个 checkpoint 评测相同 1000 条 validation 样本，共 28 次；
+- `analysis/` 中生成 comparison JSON/Markdown、CSV 和 `quality_curves.svg`；
+- `pipeline_complete.json` 存在且所有上游产物校验通过。
 
-WMT14 在本阶段用于比较两种模型的早期学习速度和生成能力，不追求充分收敛。新运行与旧小 batch
-的 90K 并不等价；报告必须同时给 optimizer
-steps 与 samples seen。
+模型与配置：
 
-## 2. 不变边界
+| GPU | 编号 | 配置 |
+| ---: | --- | --- |
+| 0 | E0 | `train_de-en-ELF-B-E0.yml` |
+| 1 | W0 | `train_de-en-WONN-L12K768T3-W0.yml` |
+| 2 | W1 | `train_de-en-WONN-L6K768T3-W1.yml` |
+| 3 | W2 | `train_de-en-WONN-L9K768T3-W2.yml` |
 
-- 不使用本地历史 checkpoint、warm start、训练指标或生成结果。
-- 不修改 ELF encoder、Flow Matching、conditioning、sampler 或 shared decoder。
-- 不覆盖官方 ELF 配置或历史输出目录。
-- 除 2026-09-03 用户明确将运行从 30K 缩短到 20K 的一次性迁移外，同一次 run 恢复时不得改变
-  commit、GPU 布局、world size、有效 batch、学习率、warmup、目标 step、checkpoint 列表或评测口径。
-- 正式训练只允许写入持久卷中的新目录。
+## 2. Batch 与 step 语义
 
-当前配置：
-
-- `src/configs/training_configs/train_de-en-ELF-B-cloud-60k.yml`
-- `src/configs/training_configs/train_de-en-WONN-L12K768T3-cloud-60k.yml`
-
-## 3. GPU 统筹
-
-默认 `2+2`：
+训练配置中的 `global_batch_size` 是每次 optimizer update 的 effective batch：
 
 ```text
-GPU 0-1  -> ELF-B，2-rank DDP
-GPU 2-3  -> WONN，2-rank DDP
-两边并发训练；训练完成后 GPU 0-3 静态消费 8 个 checkpoint 评测任务
+512 = per-device micro-batch 16 × world size 1 × grad_accum_steps 32
 ```
 
-本轮不测试 `4-serial`，固定 `grad_accum_steps=1`：
+`warmup_steps`、`log_freq`、`max_optimizer_steps` 和 `save_optimizer_steps` 全部使用 optimizer-step
+单位。checkpoint 文件名也使用 optimizer step；checkpoint 内部仍保存精确 micro-step 状态以供恢复。
 
-```text
-effective batch = per-device batch × world size
-```
+100K 约为论文 WMT14 完整 880K 预算的 11.4%，用于架构筛选，不作为充分收敛结果。
 
-配置中的 `global_batch_size=24` 在 2+2 时解析为每 rank 12。不要因 GPU 利用率未达到 100%
-而扩大 batch；以端到端用时和稳定性为准。
-
-## 4. clean commit gate
-
-在本地完成后提交代码，并记录 commit：
+## 3. 本地提交前验证
 
 ```bash
-git status --short
-git rev-parse HEAD
 .venv/bin/python -m unittest discover -v
 bash -n scripts/bootstrap_cloud_env.sh scripts/verify_cloud_env.sh \
-  scripts/run_cloud_pair_pipeline.sh
+  scripts/run_cloud_matrix_pipeline.sh
+.venv/bin/python scripts/analyze_cloud_matrix.py validate-configs \
+  --config-dir src/configs/training_configs
+git status --short
 ```
 
-`git status --short` 必须为空。不要复制 dirty worktree 作为正式实验版本。
+正式上传前必须形成 clean commit；不复制 dirty 工作区。
 
-## 5. 构建和验证云环境
-
-在 Ubuntu x86_64 云实例中：
+## 4. 云端环境
 
 ```bash
 sudo bash scripts/bootstrap_cloud_env.sh
@@ -80,106 +59,90 @@ export DLM_WONN_EXPECTED_GPU_COUNT=4
 bash scripts/verify_cloud_env.sh
 ```
 
-验证脚本会检查固定 Python/依赖、clean checkout、4 张可见 GPU、原生 BF16、CUDA
-`torch.compile` 和项目模块导入。系统镜像只有在这一步完整通过后才可保存。
-锁定环境使用 PyTorch 2.6.0 的 CUDA 12.4 wheel，以匹配目标主机的 NVIDIA 550 驱动；不要改用
-CUDA 13 wheel，也不要跳过驱动兼容性检查。
-
-数据、encoder 和 tokenizer 必须按两份 YAML 固定的 revision 预下载到持久缓存。首次联网准备时可
-设置 `HF_HUB_OFFLINE=0 HF_DATASETS_OFFLINE=0`；正式运行默认离线，避免中途网络漂移。
-
-固定缓存位置：
+固定缓存放在持久卷：
 
 ```bash
 export HF_HOME=/root/shared-nvme/dlm-wonn/cache/huggingface
 ```
 
-## 6. 唯一 smoke 与固定预算
+首次预下载可设置 `HF_HUB_OFFLINE=0 HF_DATASETS_OFFLINE=0`；正式运行使用离线模式，避免数据和
+模型 revision 漂移。
 
-只执行一次 2+2 并发 smoke：ELF 使用 GPU 0、1，WONN 使用 GPU 2、3；每卡 batch 12、global
-batch 24、lr `5e-4`、warmup 3000。先运行到约 100 step 并保存 checkpoint，再从同一目录恢复到
-约 200 step。记录两边稳定后的 seconds/step、samples/second、峰值显存，并验证 loss/梯度/参数
-有限、DDP 正常退出、无 NCCL hang、checkpoint 可加载且恢复后的 step/metrics 连续。
+## 5. GPU profile gate
 
-不搜索其他 batch、学习率、scheduler 或 GPU 布局。正式预算固定为 20K；smoke 吞吐仅用于报告
-预计墙钟时间，不再决定 50K/60K 分支。运行配置检查：
+正式训练前，对四个配置分别使用 `scripts/profile_cloud_training.py` 测 micro-batch 16。每组至少在
+compile 后稳定测量 30–100 个 micro-steps，记录 seconds/step、samples/second 和峰值显存。
+profile 脚本的 warmup 参数只是性能预热，不是正式训练的 5K optimizer-step warmup。
+
+示例：
 
 ```bash
-$DLM_WONN_PYTHON scripts/analyze_cloud_pair.py validate-configs \
-  --elf-config src/configs/training_configs/train_de-en-ELF-B-cloud-60k.yml \
-  --wonn-config src/configs/training_configs/train_de-en-WONN-L12K768T3-cloud-60k.yml \
-  --effective-batch 24 --world-size 2 --target-steps 20000
+CUDA_VISIBLE_DEVICES=0 $DLM_WONN_PYTHON scripts/profile_cloud_training.py \
+  --config src/configs/training_configs/train_de-en-ELF-B-E0.yml \
+  --model ELF-B --decoder-prob 0.2 --batch-size 16 \
+  --warmup-steps 30 --measure-steps 100 --output outputs/profile/e0.json
 ```
-两份配置必须使用相同的固定 `lr=0.0005`。
 
-## 7. preflight 与正式启动
+W0/W1/W2 使用各自配置、`--model ELF-WONN-B` 和独立输出文件。任何一组 OOM 都停止：将四份正式
+配置统一改为 micro-batch 8 / accumulation 64，重新测试、提交并使用新的 run root；不得只覆盖
+单个模型。
 
-每次运行使用全新持久目录：
+四模型并发会共享 CPU 与存储，因此并发吞吐用于估算总墙钟时间；模型间速度结论应另做隔离 profile。
+
+## 6. Preflight
+
+每次正式运行使用新的持久目录：
 
 ```bash
 export DLM_WONN_PYTHON=/opt/dlm-wonn-venv/bin/python
-export DLM_WONN_TARGET_STEPS=20000
 commit_short="$(git rev-parse --short=7 HEAD)"
-export DLM_WONN_PAIR_RUN_ROOT="/root/shared-nvme/dlm-wonn/runs/wmt14-pair-${commit_short}-20000"
-export DLM_WONN_GPU_LAYOUT=2+2
-export DLM_WONN_GLOBAL_BATCH_SIZE=24
-export DLM_WONN_EVAL_SAMPLES=500
+export DLM_WONN_RUN_ROOT="/root/shared-nvme/dlm-wonn/runs/wmt14-matrix-${commit_short}-100000"
 export DLM_WONN_ALL_GPUS=0,1,2,3
-export DLM_WONN_ELF_GPUS=0,1
-export DLM_WONN_WONN_GPUS=2,3
+export DLM_WONN_EVAL_BATCH_SIZE=16
 export HF_HOME=/root/shared-nvme/dlm-wonn/cache/huggingface
 export HF_HUB_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 export DLM_WONN_PREFLIGHT_ONLY=1
-bash scripts/run_cloud_pair_pipeline.sh
+bash scripts/run_cloud_matrix_pipeline.sh
 ```
 
-目录名中的短 commit 和目标数字必须与当前 clean checkout 及 `DLM_WONN_TARGET_STEPS` 一致。
-preflight 会验证 clean commit、正好四卡、GPU 分组、batch、固定学习率、
-warmup、目标 step、checkpoint、评测契约和输出目录名。
+Preflight 校验 clean checkout、四张可见 GPU、固定矩阵、batch/LR/warmup/checkpoint、输出目录名和
+provenance。它不会开始训练。
 
-preflight 通过后，在同一 clean commit 上取消该变量并在 `tmux` 中启动：
+## 7. 正式启动与恢复
 
 ```bash
 unset DLM_WONN_PREFLIGHT_ONLY
-tmux new -s dlm-wonn-cloud-pair
-bash scripts/run_cloud_pair_pipeline.sh
+tmux new -s dlm-wonn-matrix
+bash scripts/run_cloud_matrix_pipeline.sh
 ```
 
-不要并行启动第二个相同 run root。pipeline 使用顶层锁和两个训练锁阻止重复进程。
-
-## 8. 恢复、监控与失败处理
-
-安全监控：
+监控：
 
 ```bash
 nvidia-smi
-tail -F "$DLM_WONN_PAIR_RUN_ROOT/elf/pipeline.log"
-tail -F "$DLM_WONN_PAIR_RUN_ROOT/wonn/pipeline.log"
+tail -F "$DLM_WONN_RUN_ROOT/e0/pipeline.log"
+tail -F "$DLM_WONN_RUN_ROOT/w0/pipeline.log"
+tail -F "$DLM_WONN_RUN_ROOT/w1/pipeline.log"
+tail -F "$DLM_WONN_RUN_ROOT/w2/pipeline.log"
 ```
 
-自动监控建议约每 10 分钟检查一次 tmux、两个 optimizer step、四卡进程归属、显存、pipeline 状态
-和日志尾部；发现进程退出、NaN/Inf、NCCL 或 OOM 时立即处理，不必等满 10 分钟。
+实例重启后，只在确认没有存活训练进程时，以相同 commit、环境变量和 run root 重新执行 pipeline。
+已完成模型会跳过，未完成模型从自己目录的最新 checkpoint 恢复。以下情况必须新建 run root：
 
-实例重启后，只在确认没有存活训练进程时，用完全相同的 commit、环境变量和 run root 重新执行
-pipeline。已完成的一侧会跳过，未完成的一侧从自身 checkpoint 恢复。以下情况必须新建 run root：
+- commit、模型、batch、LR、warmup、目标 step、checkpoint 或评测样本数变化；
+- checkpoint 来自其他模型或其他输出目录；
+- provenance 缺失，或目录曾被手工混合。
 
-- 需要更换 commit、布局、world size、batch/LR、warmup、目标 step、checkpoint 或评测样本数；
-- 现有 checkpoint 缺少 pair provenance；
-- 输出目录来源不明确或曾被手工混合。
-
-任一训练或评测失败都会阻止顶层完成标记。不要手工伪造 `training_complete.json`、
-`evaluation_complete.json` 或 `pipeline_complete.json`。
-
-## 9. 产物验收
+## 8. 产物
 
 ```text
 <run-root>/
 ├── provenance/
-├── elf/checkpoint_{step}/
-├── elf/evaluations/checkpoint_{step}/
-├── wonn/checkpoint_{step}/
-├── wonn/evaluations/checkpoint_{step}/
+├── e0/checkpoint_{step} + evaluations/checkpoint_{step}/
+├── w0/checkpoint_{step} + evaluations/checkpoint_{step}/
+├── w1/checkpoint_{step} + evaluations/checkpoint_{step}/
+├── w2/checkpoint_{step} + evaluations/checkpoint_{step}/
 ├── analysis/comparison.json
 ├── analysis/metrics_by_checkpoint.csv
 ├── analysis/comparison.md
@@ -187,8 +150,5 @@ pipeline。已完成的一侧会跳过，未完成的一侧从自身 checkpoint 
 └── pipeline_complete.json
 ```
 
-最终报告至少包含 BLEU、chrF++、TER、空输出率、唯一输出率、长度比、loss、samples seen、训练/
-评测吞吐、训练耗时、sampler latency 和峰值评测显存。图中同时按 optimizer step 和 samples seen
-展示 BLEU 与 chrF++。
-
-将结果回传本地时复制整个 run root 到新的 Git 忽略目录，不覆盖 `outputs/phase5/` 中的历史归档。
+结果回传本地时复制整个 run root 到新的 Git 忽略目录，不覆盖 `outputs/phase5/` 历史归档。100K 后
+按 `RESEARCH_PLAN.md` 的 gate 选择候选；完整 3000 条 validation 复评另行执行。

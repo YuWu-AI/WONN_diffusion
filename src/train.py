@@ -151,6 +151,20 @@ def _requested_checkpoint_step(
     return optimizer_step if optimizer_step in requested_optimizer_steps else None
 
 
+def _resolve_warmup_optimizer_steps(
+    warmup_steps: int,
+    warmup_epochs,
+    steps_per_epoch: int,
+    grad_accum_steps: int,
+) -> int:
+    """Resolve warmup in optimizer-step units."""
+    if warmup_steps >= 0:
+        return warmup_steps
+    if warmup_epochs is not None:
+        return int(warmup_epochs * steps_per_epoch) // grad_accum_steps
+    return 0
+
+
 def _reconcile_metrics_file(metrics_path: str, resume_step: int):
     """Keep one latest valid metric per completed step up to a resume point."""
     summary = {"lines": 0, "kept": 0, "duplicates": 0, "discarded": 0}
@@ -227,13 +241,16 @@ def _finalize_training(
 ):
     """Persist the terminal state, mark training complete, and optionally evaluate."""
     state.step = global_step
+    checkpoint_step = global_step // getattr(config, "grad_accum_steps", 1)
     final_checkpoint = os.path.abspath(
-        os.path.join(config.output_dir, f"checkpoint_{global_step}")
+        os.path.join(config.output_dir, f"checkpoint_{checkpoint_step}")
     )
-    if os.path.isfile(final_checkpoint):
+    if os.path.isfile(final_checkpoint) and os.path.getsize(final_checkpoint) > 0:
         log_for_0(f"Final checkpoint already exists at {final_checkpoint}")
     else:
-        save_checkpoint(state, config.output_dir, global_step, hf_repo_id=config.hf_repo_id)
+        save_checkpoint(
+            state, config.output_dir, checkpoint_step, hf_repo_id=config.hf_repo_id,
+        )
         log_for_0(f"Final checkpoint saved to {config.output_dir}")
 
     if training_complete_payload is not None and _rank() == 0:
@@ -265,15 +282,16 @@ def run_training(config, *, force_cpu: bool = False):
     device = torch.device("cpu") if force_cpu or not torch.cuda.is_available() else torch.device(f"cuda:{local_rank}")
     rank = _rank()
     world = _world_size()
+    grad_accum_steps = config.grad_accum_steps
     local_batch_size, total_batch_size = resolve_batch_sizes(
-        config.global_batch_size, config.batch_size, world,
+        config.global_batch_size, config.batch_size, world, grad_accum_steps,
     )
     if config.global_batch_size is not None:
         log_for_0(f"Using global batch size: {config.global_batch_size}")
     else:
         log_for_0(f"Using batch size per device: {config.batch_size}")
     config.batch_size = local_batch_size
-    config.global_batch_size = total_batch_size
+    config.global_batch_size = total_batch_size * grad_accum_steps
 
     log_for_0("=" * 60)
     log_for_0("ELF Diffusion Model Training (PyTorch)")
@@ -366,16 +384,13 @@ def run_training(config, *, force_cpu: bool = False):
 
     steps_per_epoch = len(train_dataset) // total_batch_size
     num_train_steps = steps_per_epoch * config.epochs
-    if config.warmup_steps >= 0:
-        num_warmup_steps = config.warmup_steps
-    elif config.warmup_epochs is not None:
-        num_warmup_steps = int(config.warmup_epochs * steps_per_epoch)
-    else:
-        num_warmup_steps = 0
-
-    # Gradient accumulation: LR schedule is parameterized in optimizer steps
-    grad_accum_steps = config.grad_accum_steps
-    num_warmup_optimizer_steps = num_warmup_steps // grad_accum_steps
+    # The LR schedule, warmup, logging and checkpoints all use optimizer steps.
+    num_warmup_optimizer_steps = _resolve_warmup_optimizer_steps(
+        config.warmup_steps,
+        config.warmup_epochs,
+        steps_per_epoch,
+        grad_accum_steps,
+    )
     num_optimizer_steps, target_train_steps, save_optimizer_steps = _resolve_step_schedule(
         num_train_steps=num_train_steps,
         grad_accum_steps=grad_accum_steps,
@@ -393,7 +408,7 @@ def run_training(config, *, force_cpu: bool = False):
     log_for_0(
         f"World={world} | batch local={local_batch_size}, total={total_batch_size} | "
         f"steps/epoch={steps_per_epoch}, total_train={target_train_steps}, "
-        f"warmup={num_warmup_steps}, lr={config.lr:.2e}"
+        f"warmup optimizer steps={num_warmup_optimizer_steps}, lr={config.lr:.2e}"
     )
     if grad_accum_steps > 1:
         log_for_0(
@@ -644,7 +659,11 @@ def run_training(config, *, force_cpu: bool = False):
             train_metrics.append(metrics)
             epoch_pbar.update(1)
 
-            if global_step % config.log_freq == 0:
+            completed_optimizer_step = global_step // grad_accum_steps
+            if (
+                global_step % grad_accum_steps == 0
+                and completed_optimizer_step % config.log_freq == 0
+            ):
                 loss_mean = torch.stack([m["loss"] for m in train_metrics]).mean()
                 metric_totals = {
                     key: torch.stack([m[key] for m in train_metrics]).sum()
@@ -684,7 +703,8 @@ def run_training(config, *, force_cpu: bool = False):
 
                 if rank == 0:
                     tqdm.write(
-                        f"INFO - engine - Step {global_step}: loss={avg_loss:.4f}, "
+                        f"INFO - engine - Optimizer step {completed_optimizer_step}: "
+                        f"loss={avg_loss:.4f}, "
                         f"l2={avg_l2:.4f}, ce={avg_ce:.4f}, "
                         f"lr={current_lr:.2e}, steps/sec={steps_per_sec:.2f}"
                     )
@@ -704,7 +724,7 @@ def run_training(config, *, force_cpu: bool = False):
                     with open(metrics_path, "a", encoding="utf-8") as metrics_file:
                         metric_payload = {
                             "step": global_step,
-                            "optimizer_step": global_step // grad_accum_steps,
+                            "optimizer_step": completed_optimizer_step,
                             "loss": avg_loss,
                             "l2_loss": avg_l2,
                             "ce_loss": avg_ce,
@@ -727,7 +747,7 @@ def run_training(config, *, force_cpu: bool = False):
             )
             if optimizer_step is not None:
                 save_checkpoint(
-                    state, config.output_dir, global_step,
+                    state, config.output_dir, optimizer_step,
                     hf_repo_id=config.hf_repo_id,
                 )
                 log_for_0(

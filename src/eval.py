@@ -4,6 +4,7 @@
 import argparse
 import logging
 import os
+from pathlib import Path
 import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -17,7 +18,7 @@ from transformers import AutoTokenizer
 from modules.t5_encoder import get_encoder
 from modules.model_factory import build_model
 from utils.logging_utils import log_for_0
-from utils.checkpoint_utils import load_checkpoint
+from utils.checkpoint_utils import _checkpoint_step, load_checkpoint
 from utils.train_utils import TrainState, get_optimizer
 from utils.data_utils import load_jsonl_dataset, load_dataset_split, get_pad_token_id
 from generation import test_generation_uncond, test_generation_cond
@@ -157,6 +158,11 @@ def main():
 
     log_for_0(f"Loading checkpoint from: {args.checkpoint_path}")
     state, _ = load_checkpoint(args.checkpoint_path, state)
+    # Training state counts micro-batches, while formal checkpoint filenames
+    # use optimizer steps. Evaluation artifacts follow the filename contract.
+    reported_step = _checkpoint_step(Path(args.checkpoint_path).name)
+    if reported_step >= 0:
+        state.step = reported_step
     state.model = state.model.to(device).eval()
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats(device)

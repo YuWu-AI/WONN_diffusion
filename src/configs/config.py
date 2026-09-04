@@ -88,9 +88,9 @@ class Config:
     # Training (optimizer + schedule)
     epochs: int = 200
     warmup_epochs: float = None
-    warmup_steps: int = 5000
+    warmup_steps: int = 5000  # Optimizer steps, not micro-batches.
     batch_size: int = None
-    global_batch_size: int = 512
+    global_batch_size: int = 512  # Effective batch per optimizer update.
     lr: float = None
     blr: float = 5e-5
     min_lr: float = 0.0
@@ -123,7 +123,7 @@ class Config:
     eval_ppl_max_length: int = 1024  # Max sequence length for PPL evaluation
 
     # Logging & Checkpointing
-    log_freq: int = 100
+    log_freq: int = 100  # Optimizer steps.
     eval_freq: int = 10
     save_freq: float = 100  # Can be fractional (e.g., 0.1 for saving every 0.1 epoch)
     save_optimizer_steps: str = None  # Optional comma-separated optimizer steps.
@@ -148,10 +148,26 @@ class Config:
     num_workers: int = 8
 
 
-def resolve_batch_sizes(global_batch_size, batch_size, world_size: int) -> tuple[int, int]:
-    """Resolve per-rank and total batch sizes without silently dropping samples."""
+def resolve_batch_sizes(
+    global_batch_size,
+    batch_size,
+    world_size: int,
+    grad_accum_steps: int = 1,
+) -> tuple[int, int]:
+    """Resolve per-rank and per-micro-step total batch sizes.
+
+    ``global_batch_size`` is the effective batch consumed by one optimizer
+    update. ``batch_size`` remains the per-rank micro-batch fallback.
+    """
     if isinstance(world_size, bool) or not isinstance(world_size, int) or world_size <= 0:
         raise ValueError("world_size must be a positive integer")
+
+    if (
+        isinstance(grad_accum_steps, bool)
+        or not isinstance(grad_accum_steps, int)
+        or grad_accum_steps <= 0
+    ):
+        raise ValueError("grad_accum_steps must be a positive integer")
 
     if global_batch_size is not None:
         if (
@@ -160,12 +176,14 @@ def resolve_batch_sizes(global_batch_size, batch_size, world_size: int) -> tuple
             or global_batch_size <= 0
         ):
             raise ValueError("global_batch_size must be a positive integer")
-        if global_batch_size % world_size != 0:
+        divisor = world_size * grad_accum_steps
+        if global_batch_size % divisor != 0:
             raise ValueError(
                 f"global_batch_size ({global_batch_size}) must be divisible by "
-                f"world_size ({world_size})"
+                f"world_size * grad_accum_steps ({divisor})"
             )
-        return global_batch_size // world_size, global_batch_size
+        total_micro_batch = global_batch_size // grad_accum_steps
+        return total_micro_batch // world_size, total_micro_batch
 
     if (
         isinstance(batch_size, bool)

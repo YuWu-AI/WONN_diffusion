@@ -44,10 +44,12 @@ class RepositoryHygieneTest(unittest.TestCase):
 
     def test_current_cloud_entrypoints_are_unambiguous(self):
         current = (
-            "src/configs/training_configs/train_de-en-ELF-B-cloud-60k.yml",
-            "src/configs/training_configs/train_de-en-WONN-L12K768T3-cloud-60k.yml",
-            "scripts/run_cloud_pair_pipeline.sh",
-            "scripts/analyze_cloud_pair.py",
+            "src/configs/training_configs/train_de-en-ELF-B-E0.yml",
+            "src/configs/training_configs/train_de-en-WONN-L12K768T3-W0.yml",
+            "src/configs/training_configs/train_de-en-WONN-L6K768T3-W1.yml",
+            "src/configs/training_configs/train_de-en-WONN-L9K768T3-W2.yml",
+            "scripts/run_cloud_matrix_pipeline.sh",
+            "scripts/analyze_cloud_matrix.py",
         )
         for relative_path in current:
             self.assertTrue((REPO_ROOT / relative_path).is_file(), relative_path)
@@ -61,6 +63,8 @@ class RepositoryHygieneTest(unittest.TestCase):
         for document in active_docs:
             text = document.read_text(encoding="utf-8")
             self.assertNotIn("phase5-cloud", text, document)
+            self.assertNotIn("cloud-60k", text, document)
+            self.assertNotIn("run_cloud_pair_pipeline", text, document)
 
 
 if __name__ == "__main__":

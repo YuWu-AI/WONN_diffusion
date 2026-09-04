@@ -22,7 +22,7 @@
 | `src/modules/wonn_layers.py` | S/I、QKV/O attentive coupling、phase update、OmegaTransition |
 | `src/modules/wonn_model.py` | ELF-compatible WONN 完整模型 |
 | `src/modules/model_factory.py` | ELF/WONN 公共构造入口 |
-| `src/configs/training_configs/` | 官方 ELF、基础 WONN 和当前云端配对配置；分类见目录内 `README.md` |
+| `src/configs/training_configs/` | 官方 ELF、基础 WONN 和当前四模型筛选配置；分类见目录内 `README.md` |
 | `src/configs/sampling_configs/` | 条件与无条件采样配置 |
 
 官方 ELF YAML 保持基线用途；WONN 和云端 YAML 是独立派生配置，不覆盖上游基线。
@@ -34,12 +34,12 @@
 | 通用启动 | `scripts/launch.sh` |
 | 契约验证 | `scripts/verify_phase2.py`、`verify_phase3.py`、`verify_phase4.py` |
 | 训练工程公共工具 | `cloud_pipeline_checks.py`、`profile_cloud_training.py` |
-| 4 GPU 云端配对 | `bootstrap_cloud_env.sh`、`verify_cloud_env.sh`、`run_cloud_pair_pipeline.sh`、`analyze_cloud_pair.py`；执行口径见 [`CLOUD_PHASE1_RUNBOOK.md`](CLOUD_PHASE1_RUNBOOK.md) |
+| 4 GPU 云端矩阵 | `bootstrap_cloud_env.sh`、`verify_cloud_env.sh`、`run_cloud_matrix_pipeline.sh`、`analyze_cloud_matrix.py`；执行口径见 [`CLOUD_PHASE1_RUNBOOK.md`](CLOUD_PHASE1_RUNBOOK.md) |
 
 云端容器应在 `tmux` 中直接运行 `run_*_pipeline.sh`。所有正式流水线都会拒绝 dirty checkout，
 并将 commit、resolved config、数据 revision、seed、训练状态和评测完成标记写入输出目录。
-云端配对入口默认以 GPU 0–1 训练 ELF、GPU 2–3 训练 WONN，训练完成后四卡并行消费 checkpoint
-评测队列；也支持 profile Gate 选出的四卡串行模式，但同一次正式 run 不得切换 world size。
+云端矩阵固定 GPU 0/1/2/3 分别训练 E0/W0/W1/W2。每个模型为单进程单卡训练；训练完成后，
+四卡并行消费统一 checkpoint 评测队列。
 
 ## 4. 测试
 
@@ -62,7 +62,7 @@
 | `outputs/phase5/learning_rate_diagnostic_20260825/` | 历史学习率诊断报告 |
 
 这些目录是需要保留的历史证据，但当前代码不再包含对应旧流水线。新运行必须写入独立的
-`DLM_WONN_PAIR_RUN_ROOT`，避免覆盖归档。
+`DLM_WONN_RUN_ROOT`，避免覆盖归档。
 
 ## 6. 其他目录
 

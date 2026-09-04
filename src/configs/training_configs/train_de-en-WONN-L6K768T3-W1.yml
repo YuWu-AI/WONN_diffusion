@@ -1,4 +1,4 @@
-# Phase 1 cloud pair: WONN-L12/K768/T3, from scratch to 20K.
+# W1: shallow WONN depth control, 100K architecture screen.
 data_path: "embedded-language-flows/wmt14_de-en_train_t5"
 eval_data_path: "embedded-language-flows/wmt14_de-en_validation_t5"
 data_revision: "aee21115965ee2b9d3d6d02ec2a72f4f998476d9"
@@ -19,7 +19,7 @@ num_time_tokens: 4
 num_self_cond_cfg_tokens: 4
 num_model_mode_tokens: 4
 wonn_num_oscillators: 768
-wonn_num_layers: 12
+wonn_num_layers: 6
 wonn_num_inner_steps: 3
 wonn_num_heads: 12
 wonn_step_init: 0.1
@@ -29,7 +29,7 @@ denoiser_p_mean: -1.5
 denoiser_p_std: 0.8
 denoiser_noise_scale: 2.0
 t_eps: 0.05
-time_schedule: "logit_normal"
+time_schedule: logit_normal
 decoder_prob: 0.2
 decoder_noise_scale: 1.0
 decoder_p_mean: 0.8
@@ -37,34 +37,33 @@ decoder_p_std: 0.8
 label_drop_prob: 0.1
 self_cond_prob: 0.5
 
-epochs: 1
-# Fixed paired-run batch. With 2-rank DDP this resolves to 12 samples per rank.
-global_batch_size: 24
+epochs: 100
+global_batch_size: 512
 batch_size: null
-grad_accum_steps: 1
-max_optimizer_steps: 20000
+grad_accum_steps: 32
+max_optimizer_steps: 100000
 blr: 0.001
-lr: 0.0005
+lr: 0.001
 lr_schedule: constant
 weight_decay: 0.0
-warmup_steps: 3000
+warmup_steps: 5000
 optimizer: muon
 compile_train: true
 gradient_checkpointing: false
 ema_decay1: 0.9999
 
 sampling_configs_path: "src/configs/sampling_configs/cond_sampling_configs.yml"
-num_samples: 500
+num_samples: 1000
 online_eval: true
 use_compile: false
 
 log_freq: 100
-save_optimizer_steps: "5000,10000,15000,20000"
-save_freq: 100
-eval_freq: 100
+save_optimizer_steps: "5000,10000,25000,40000,60000,80000,100000"
+save_freq: 0
+eval_freq: 0
 final_eval: false
 
-output_dir: "outputs/cloud_pair_60k/wonn"
+output_dir: "outputs/cloud_matrix_100k/w1"
 hf_repo_id: null
 resume: null
 init_from: null

@@ -19,6 +19,7 @@ from train import (
     _reconcile_metrics_file,
     _requested_checkpoint_step,
     _resolve_step_schedule,
+    _resolve_warmup_optimizer_steps,
     _resume_position,
 )
 from configs.config import resolve_batch_sizes
@@ -37,6 +38,15 @@ class TrainingScheduleTest(unittest.TestCase):
 
     def test_per_device_batch_resolves_total_batch(self):
         self.assertEqual(resolve_batch_sizes(None, 12, 4), (12, 48))
+
+    def test_global_batch_includes_gradient_accumulation(self):
+        self.assertEqual(resolve_batch_sizes(512, None, 1, 32), (16, 16))
+        with self.assertRaisesRegex(ValueError, r"world_size \* grad_accum_steps"):
+            resolve_batch_sizes(500, None, 1, 32)
+
+    def test_warmup_steps_are_optimizer_steps(self):
+        self.assertEqual(_resolve_warmup_optimizer_steps(5000, None, 100, 32), 5000)
+        self.assertEqual(_resolve_warmup_optimizer_steps(-1, 2.0, 160, 32), 10)
 
     def test_exact_optimizer_budget_and_requested_checkpoints(self):
         optimizer_steps, train_steps, save_steps = _resolve_step_schedule(
@@ -155,7 +165,7 @@ class TrainingFinalizationTest(unittest.TestCase):
     ):
         state = SimpleNamespace(step=10000)
         with tempfile.TemporaryDirectory() as tmpdir:
-            (Path(tmpdir) / "checkpoint_10000").touch()
+            (Path(tmpdir) / "checkpoint_10000").write_bytes(b"checkpoint")
             config = SimpleNamespace(output_dir=tmpdir, hf_repo_id=None)
             _finalize_training(
                 state=state,
@@ -180,6 +190,7 @@ class TrainingFinalizationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = SimpleNamespace(
                 output_dir=tmpdir, hf_repo_id=None, final_eval=False,
+                grad_accum_steps=4,
             )
             _finalize_training(
                 state=state,
@@ -192,7 +203,7 @@ class TrainingFinalizationTest(unittest.TestCase):
                 global_step=20000,
                 training_complete_payload={
                     "status": "complete",
-                    "completed_optimizer_step": 20000,
+                    "completed_optimizer_step": 5000,
                 },
             )
             marker = json.loads(
@@ -200,8 +211,8 @@ class TrainingFinalizationTest(unittest.TestCase):
             )
 
         self.assertEqual(marker["status"], "complete")
-        self.assertEqual(marker["completed_optimizer_step"], 20000)
-        self.assertEqual(marker["checkpoint"], str(Path(tmpdir) / "checkpoint_20000"))
+        self.assertEqual(marker["completed_optimizer_step"], 5000)
+        self.assertEqual(marker["checkpoint"], str(Path(tmpdir) / "checkpoint_5000"))
         save_mock.assert_called_once()
         generation_mock.assert_not_called()
 

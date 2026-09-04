@@ -1,174 +1,108 @@
-# ELF-WONN 新阶段研究计划
+# ELF-WONN 研究计划
 
-> 计划重置日期：2026-08-11；代码状态更新：2026-09-03
-> Phase 1–4 的基础实现与验收已经完成，统一沉淀在
-> [`PROJECT_HANDOFF.md`](../PROJECT_HANDOFF.md)。本文从新的 Phase 1 重新编号。
+> 当前口径更新：2026-09-04。Phase 1–4 的基础实现与验收见
+> [`PROJECT_HANDOFF.md`](../PROJECT_HANDOFF.md)。
 
-## 1. 新旧阶段映射
+## 1. 当前研究顺序
 
-| 新计划 | 对应旧进度 | 定位 |
+| 阶段 | 任务 | 目的 |
 | --- | --- | --- |
-| Phase 1 | 原 Phase 5 | 整理训练基础设施，并在云端从头重跑端到端工程实验 |
-| Phase 2 | 原拟定 Phase 6 | OpenWebText 无条件生成主实验 |
-| Phase 3 | 原拟定 Phase 7 | XSum 条件摘要实验 |
+| Phase 1 | WMT14 100K 四模型架构筛选 | 分离 WONN 深度效应，确认后期质量走势 |
+| Phase 2 | OpenWebText 无条件生成 | 主实验，比较 PPL–entropy 与资源效率 |
+| Phase 3 | XSum 条件摘要 | 验证长条件上下文和事实一致性 |
 
-WMT14 翻译不再承担主要研究结论。新 Phase 1 只用它验证代码、云端环境、训练恢复和统一评测
-链路；所有实验数据将在云端重新产生，本地旧 pilot 指标不纳入新计划的结果判断。
+WMT14 仍是诊断任务，不承担最终通用语言建模结论。Phase 1 只允许执行下述固定矩阵；结束后根据
+预先定义的 gate 决定是否把少量模型延长到 200K，然后进入 Phase 2。
 
-## 2. Phase 1 当前代码进度
+## 2. Phase 1：WMT14 100K 架构筛选
 
-原 Phase 5 中仍通用的训练能力已经从 `phase5-wmt14` 合并到 `main`；旧实验专属脚本、配置和
-测试已退出当前目录。当前主线已经实现：
+### 2.1 研究问题
 
-- 按 optimizer step 精确限制训练预算；
-- 在指定 step 保存 checkpoint；
-- resume 后恢复 step、optimizer、EMA、scheduler 和 RNG；
-- reconcile `train_metrics.jsonl`，避免恢复训练后指标重复或越界；
-- 从兼容 checkpoint 只加载 model/EMA 的 warm start；
-- 区分纯训练完成标记与评测完成标记；
-- checkpoint 结构、finite values、生成工件和指标的汇总校验；
-- WMT14 ELF/WONN 独立实验 YAML、profiling、后台流水线和训练工程回归测试；
-- 单机单卡与单机多卡 `torchrun` 启动入口；
-- 新 WONN 文本交互：逐振子 S/I MLP、完整 QKV/O、默认 SDPA，以及独立
-  `OmegaTransition`；旧 QK dimension/coupling mode/warm-start 入口已移除；
-- 4-GPU 云端配对入口：固定 2+2 并发、global batch 24、lr `5e-4`、warmup 3000；从头
-  训练到 20K；WONN 评测 5K、10K、15K、20K，ELF 评测现存的 10K、15K、20K，共 7 次评测；
-- 相对项目路径和 `DLM_WONN_PYTHON` 等环境变量覆盖；正式流水线
-  只要求 clean checkout，不再依赖特定 worktree。
+在数据、生成框架、宽度、inner steps、优化器和有效 batch 相同的条件下，WONN 的后期质量下降
+是否随深度增加而增强。L6、L9、L12 构成单一深度变量；E0 提供官方 ELF-B 学习率基线。
 
-旧实验的实现过程只保留在 Git 历史，当前入口和产物路径以 `docs/PROJECT_STRUCTURE.md` 为准。
-云端容器直接运行 `run_cloud_pair_pipeline.sh`。脚本默认复用缓存；全新云端首次下载时显式设置
-`HF_HUB_OFFLINE=0 HF_DATASETS_OFFLINE=0`。
+### 2.2 固定矩阵
 
-当前剩余工程门槛是：把已通过 CPU 回归的改动形成 clean commit，在目标 4-GPU 主机完成 CUDA
-single-batch、故意中断/resume 和唯一一次 2+2 多卡 smoke，再启动正式 20K 配对实验。历史本地输出继续保留，
-但只作为诊断与复现材料。
+| 编号 | 模型 | 参数量 | 峰值学习率 | GPU |
+| --- | --- | ---: | ---: | ---: |
+| E0 | ELF-B | 104,579,940 | `2e-3` | 0 |
+| W0 | WONN-L12/K768/T3 | 76,024,187 | `1e-3` | 1 |
+| W1 | WONN-L6/K768/T3 | 51,076,463 | `1e-3` | 2 |
+| W2 | WONN-L9/K768/T3 | 63,550,325 | `1e-3` | 3 |
 
-## 3. Phase 1：云端工程基线
+共同训练口径：
 
-### 目标
+- 从随机初始化开始，seed 42；
+- 100K optimizer steps，constant LR，前 5K optimizer steps linear warmup；
+- effective/global batch 512；单卡 micro-batch 16，gradient accumulation 32；
+- Muon、EMA `0.9999`、相同 WMT14/encoder/tokenizer revision；
+- checkpoint：5K、10K、25K、40K、60K、80K、100K；
+- 每个 checkpoint 使用相同前 1000 条 validation 样本，共 28 次评测；
+- 指标：BLEU、chrF++、TER、空输出率、唯一输出率、长度比、loss、吞吐、耗时和峰值显存。
 
-得到一个可追溯、可恢复、可重复的 ELF/WONN 云端训练与评测入口，为 OWT 和 XSum 提供公共
-基础设施。WMT14 只作为低成本端到端验证任务。
+E0 使用 ELF 论文/官方配置在 effective batch 512 下对应的 `2e-3`；三组 WONN 固定 `1e-3`。
+这一轮不同时更改 WONN 的 step bound、alpha bound、sampler、loss 或 inner steps。
 
-### 代码工作
+### 2.3 执行 gate
 
-1. 以 `main` 的新 WONN 交互实现和已合并的 Phase 5 通用训练能力为唯一代码主线。
-2. 保持独立 `OmegaTransition` 仅有 `L-1` 个；旧 WONN checkpoint 必须明确失败，不做迁移或
-   部分加载。
-3. 脚本使用相对项目路径或可配置环境变量；桌面通知仅作为可选本地行为，云端直接运行 pipeline。
-4. 保留官方 ELF YAML；新实验使用独立 YAML，不覆盖 upstream 配置。
-5. 把 WMT14 专用 pipeline 与公共 train/eval/checkpoint 工具分开。
-6. 为云端运行记录 commit、配置、依赖、GPU、数据 revision、随机种子和输出目录。
+1. CPU unit tests。
+2. 在目标 GPU 上分别 profile 四个模型的 micro-batch 16；任何一组 OOM 都必须修改正式配置并
+   重新形成 clean commit，不能只在命令行临时降低 batch。
+3. 四组各做单 batch BF16 forward/backward；验证 loss、梯度和参数有限。
+4. 做一次单卡 checkpoint/resume smoke，确认 optimizer-step 文件名、scheduler、EMA、RNG 和
+   metrics 连续。
+5. 从同一 clean commit 启动四个单卡进程，不使用 DDP、warm start 或历史 checkpoint。
+6. 训练完成后统一评测并由 pipeline 校验全部产物。
+
+### 2.4 100K 后的决策
+
+重点比较 40K→60K→80K→100K 的斜率，而不是只看单个终点：
+
+- L9 明显最好：延长 E0 与 L9 到 200K；
+- L6 与 L9 接近且仍上升：可同时延长二者，L12 停止；
+- 三种 WONN 都出现相似下降：下一轮只改变 dynamics step scale，不再用深度解释；
+- 只有更深模型随训练恶化：优先检查深度累积的 phase/frequency dynamics，再决定 step/alpha 消融；
+- 100K 仍明显欠拟合但走势稳定：只延长 E0 与最佳 WONN，不自动把四组全部扩到论文完整预算。
+
+完整 3000 条 validation 复评只对 E0 和入选 WONN 执行，不混入本轮统一 1000 样本曲线。
+
+## 3. Phase 2：OpenWebText
+
+### 研究问题
+
+WONN 在 1024-token 无条件生成中，能否在匹配训练预算下获得有竞争力的 generative perplexity，
+同时保持合理 entropy、吞吐、显存和 sampler latency。
 
 ### 执行顺序
 
-1. CPU unit tests。
-2. 单卡 BF16 forward/backward 和单 batch train smoke。
-3. checkpoint save、故意中断、resume、metrics 连续性检查。
-4. 单机多 GPU 约 100–200 step 的 2+2 并发 smoke，确认无 rank hang 并测量端到端速度。
-5. 按固定 20K 预算，云端从随机初始化并发运行 ELF 与 WONN，不使用 warm start。
-6. 使用同一数据、seed、训练 token/step 预算和采样配置评测。
-7. 独立检查 checkpoint、日志、生成样本和 completion manifest。
-
-### 验收门槛
-
-- 实验来自 clean commit，配置和依赖可追溯；
-- ELF 与 WONN 都能从头训练、保存、恢复并完成评测；
-- resume 前后 optimizer step 和 metrics 单调且无重复；
-- 多 GPU 启动和退出正常；
-- 产物写入持久卷，训练结束后可独立加载 checkpoint；
-- 报告资源与工程结果，但不因 WMT14 质量高低改变后续 OWT 方向。
-
-Phase 1 完成后冻结 WMT14，不再追加翻译任务预算。
-
-## 4. Phase 2：OpenWebText 无条件生成
-
-### 研究问题
-
-在相同训练和采样预算下，WONN 是否能改善 ELF 的生成质量—多样性折中。主指标是
-Gen. PPL 与 unigram entropy 的联合曲线，而不是单独优化其中一个数字。
-
-### 必要代码改动
-
-1. 从官方 `train_owt_ELF-B.yml` 派生独立 `train_owt_ELF-WONN-B.yml`，只改变 backbone、
-   WONN 超参数、资源 batch/accumulation 和输出目录。
-2. coupling 已改为默认 SDPA；保持 `forward_with_diagnostics()` 才计算完整 attention weights。
-3. 增加 1024-token BF16 forward/backward、gradient checkpointing、DDP、resume 和生成测试。
-4. 固定 GPT-2 Large PPL evaluator、tokenizer、数据 revision 和采样 sweep。
-
-训练器、Flow Matching、self-conditioning、sampler 和 shared decoder 不需要为 OWT 复制或改写。
-现有 `eval_data_path=null` 路径已经表达无条件生成。
-
-### 执行顺序与 gate
-
 1. 复评官方 ELF-B OWT checkpoint，验证 PPL/entropy evaluator。
-2. profile 1024-token WONN 的 per-device micro-batch，再用 gradient accumulation 达到目标
-   effective batch：
+2. profile 1024-token per-device micro-batch，再用 accumulation 达到目标 effective batch。
+3. 先跑 2K/5K/10K ELF/WONN pilot。
+4. 对相同 sampling steps 和 guidance 报告 PPL–entropy 曲线、空输出率和资源指标。
+5. pilot 有可信信号后，再决定完整 compute-matched 与 parameter-matched 训练。
 
-   ```text
-   effective batch = per-device batch × world size × grad_accum_steps
-   ```
+若 PPL 改善只来自 entropy collapse，或长序列成本不可接受，则先修正结构，不直接扩大预算。
 
-3. 先跑 2k/5k/10k optimizer-step ELF/WONN pilot。
-4. 对相同 sampling steps 和 guidance 设置报告 PPL–entropy 曲线、空输出率、吞吐、显存、
-   wall-clock 和 sampler latency。
-5. pilot 有可信信号后，再决定完整 compute-matched 和 parameter-matched 训练。
-
-若 PPL 改善只来自 entropy collapse，或二次 attention 导致不可接受的长序列成本，则停在 pilot，
-先修正结构或实验设计。
-
-## 5. Phase 3：XSum 摘要
+## 4. Phase 3：XSum
 
 ### 研究问题
 
-在长条件上下文中，WONN 是否能正确使用 source，并在同等预算下获得有竞争力的 ROUGE 和生成
-稳定性。
+WONN 在 1088-token 条件上下文中能否正确使用 source，并取得有竞争力的 ROUGE 与事实一致性。
 
-### 必要代码改动
+### 执行顺序
 
-1. 复用 Phase 2 已验证的长序列 SDPA 路径。
-2. 派生独立 `train_xsum_ELF-WONN-B.yml`，保留官方 ELF 配置。
-3. 增加 1088-token source+target 拼接、padding、source restore、target-only loss 和 label-drop
-   契约测试。
-4. 统一 ROUGE-1/2/L 汇总；正式结论阶段再加入实体和数字一致性检查。
+1. 复评官方 ELF-B XSum checkpoint。
+2. 验证 source+target 拼接、padding、source restore、target-only loss 和 label-drop 契约。
+3. 通过单卡、DDP、resume 和 conditional mask smoke。
+4. 跑 ELF/WONN 5K/10K pilot，再根据 ROUGE、事实一致性和资源指标决定完整训练。
 
-### 执行顺序与 gate
+Phase 3 不早于 Phase 2 的长序列 gate。
 
-1. 复评官方 ELF-B XSum checkpoint，确认数据和 evaluator。
-2. 通过 1088-token 单卡、DDP、resume 和 conditional mask smoke。
-3. 跑 ELF/WONN 5k/10k pilot。
-4. 根据 ROUGE、事实一致性、吞吐和显存决定是否完整训练。
+## 5. 公共实验纪律
 
-Phase 3 不早于 Phase 2 的长序列 gate；否则无法区分 backbone 长序列问题与 conditional masking
-问题。
-
-## 6. 不同任务的改动边界
-
-| 范围 | Phase 1 WMT14 | Phase 2 OWT | Phase 3 XSum |
-| --- | --- | --- | --- |
-| 目的 | 云端工程闭环 | 无条件生成主实验 | 条件摘要验证 |
-| 序列长度 | 64 source + 64 target | 1024 tokens | 1024 source + 64 target |
-| conditioning | 保留 source mask | 无 source condition | 保留 source mask |
-| loss mask | target only | 全文本有效 token | target only |
-| 新模型代码 | 不新增结构 | SDPA 长序列快路径 | 复用 SDPA |
-| 新配置 | WMT14 独立 YAML | OWT WONN YAML | XSum WONN YAML |
-| 主指标 | 工件完整性；BLEU 辅助 | Gen. PPL + entropy | ROUGE-1/2/L |
-
-## 7. 公共实验纪律
-
-- baseline 与 WONN 使用相同数据 revision、seed、有效 batch、训练 token/step 和采样配置。
-- 同时报告模型参数、wall-clock、峰值显存、吞吐和 sampler latency。
+- baseline 与 WONN 使用相同数据 revision、seed、有效 batch、训练预算和采样配置；明确列出的学习率
+  对照除外。
 - checkpoint、日志、样本、缓存和数据只写入 Git 忽略目录或云端持久卷。
-- 每个阶段先 unit/smoke，再 pilot，最后才允许扩大预算。
+- 正式运行必须来自 clean commit，并记录配置、依赖、数据 revision、硬件和随机种子。
+- 每阶段先 unit/smoke，再 pilot，最后才允许扩大预算。
 - “工件完整”“代码可运行”“模型质量更好”是三个独立结论，不得互相替代。
-- 云端命令必须从 clean commit 启动；禁止把 dirty worktree 临时复制为实验版本。
-
-## 8. 下一步唯一主线
-
-1. 在合并后的 `main` 完成 CPU、CUDA single-batch、checkpoint/resume 和 pipeline preflight。
-2. 将 clean commit 和代码仓库部署到云端；只预下载当前 YAML 固定的数据、encoder 和 tokenizer，
-   不上传历史 checkpoint 或 baseline 产物。
-3. 按 [`CLOUD_PHASE1_RUNBOOK.md`](CLOUD_PHASE1_RUNBOOK.md) 完成 profile、preflight、
-   短程 smoke，再启动正式 20K Phase 1。
-4. Phase 1 工程验收后立即进入 Phase 2 OWT，不继续扩展 WMT14。
